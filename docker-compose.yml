@@ -1,0 +1,28 @@
+# Local / Dokploy compose. In Dokploy you can also use a managed Postgres
+# service and point DATABASE_URL at it instead of the "db" service below.
+services:
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://newgen:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/newgen_office
+      ALLOW_SELF_APPROVAL: ${ALLOW_SELF_APPROVAL:-false}
+    ports: ["3000:3000"]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: newgen
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: newgen_office
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newgen -d newgen_office"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
