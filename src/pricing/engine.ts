@@ -118,7 +118,7 @@ const DISCOUNT_ROLES: Role[] = ["finance", "admin"];
 // ---------- Helpers ----------
 
 /** Round half-up on whole sen. Used only for percentages. */
-function percentOf(amountSen: number, bp: number): number {
+export function percentOf(amountSen: number, bp: number): number {
   // amount * bp / 10000, rounded half-up, using integer maths.
   return Math.floor((amountSen * bp + 5000) / 10000);
 }

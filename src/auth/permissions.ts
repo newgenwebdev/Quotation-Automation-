@@ -17,6 +17,10 @@ export const PERMISSIONS = {
   "catalogue.viewDrafts": ["finance", "admin"],
   "audit.read": ["finance", "admin"],
   "users.manage": ["admin"],
+  "quotes.create": ["sales", "finance", "admin"],
+  /** Sales see only their own quotations; these roles see everyone's. */
+  "quotes.viewAll": ["technical", "finance", "admin"],
+  "quotes.approve": ["finance", "admin"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

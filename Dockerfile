@@ -16,6 +16,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
+COPY public ./public
 COPY drizzle ./drizzle
 COPY scripts/migrate.mjs ./scripts/migrate.mjs
 USER node

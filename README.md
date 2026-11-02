@@ -7,12 +7,13 @@ Home of **Quinn**, NewGen's AI Quotation Specialist. See [docs/ARCHITECTURE.md](
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Pricing catalogue, commercial policy, pricing engine, roles, audit log | ✅ Built and tested |
-| 1b | Login, users, price-list / payment-terms / audit screens, price checker | ✅ Built and tested |
+| 1b | Login, users, price-list / payment-terms / audit screens | ✅ Built and tested |
+| 1c | Quotations workspace: Sales builds quotes (price-list + custom lines), Finance approves every quote, branded PDF, revisions | ✅ Built and tested |
 | 2 | AI requirements extraction (worker + pg-boss) | Not started |
 | 3 | Classification and clarification questions | Not started |
-| 4 | Rule-based quotation drafts | Not started |
-| 5 | Branded PDF | Not started |
-| 6 | Technical and finance approvals, revisions | Not started |
+| 4 | Quinn fills a draft quotation from discovery notes | Not started |
+| 5 | ~~Branded PDF~~ | Done in 1c |
+| 6 | Technical review step (finance approvals done in 1c) | Not started |
 | 7 | Virtual Office integration | Not started |
 
 ## Run locally

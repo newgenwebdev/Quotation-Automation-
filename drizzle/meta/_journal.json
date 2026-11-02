@@ -22,6 +22,20 @@
       "when": 1793606501340,
       "tag": "0002_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793611761557,
+      "tag": "0003_quotations",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793611762443,
+      "tag": "0004_quotation_guards",
+      "breakpoints": true
     }
   ]
 }

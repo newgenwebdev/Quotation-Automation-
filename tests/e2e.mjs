@@ -68,7 +68,7 @@ const admin = new Browser("admin");
   check("short password refused on setup", bad.error?.includes("at least"), bad.error);
   const { s, l } = await setupAndLogin(admin, process.env.SETUP_URL, "founder@e2e.local");
   check("admin sets password via setup link", s.ok?.includes("Password saved"), s.error);
-  check("admin logs in", l.location === "/catalogue" && admin.cookies.has("ngo_session"), JSON.stringify(l));
+  check("admin logs in", l.location === "/quotations" && admin.cookies.has("ngo_session"), JSON.stringify(l));
   const reuse = await admin.post("/api/auth/setup", { token: new URL(process.env.SETUP_URL).pathname.split("/").pop(), password: PW, confirm: PW });
   check("setup link can't be reused", reuse.error?.includes("invalid, already used or expired"), reuse.error);
   const page = await admin.get("/catalogue");
@@ -85,7 +85,7 @@ for (const [b, name, email, role] of [
   check(`${name} added and setup link shown once`, r.ok?.includes("added") && !!link, r.error);
   check(`setup link is not in the redirect URL`, !r.location.includes("setup"));
   const { l } = await setupAndLogin(b, link, email);
-  check(`${name} can sign in`, l.location === "/catalogue", JSON.stringify(l));
+  check(`${name} can sign in`, l.location === "/quotations", JSON.stringify(l));
 }
 {
   const dup = await admin.post("/api/users", { name: "Dup", email: "SALES@e2e.local", role: "sales" });
@@ -164,18 +164,79 @@ console.log("\n6. Payment terms");
   check("second finance person approves terms", ok.ok?.includes("in force"), ok.error);
 }
 
-console.log("\n7. Price checker (the pricing engine through the screen)");
+console.log("\n7. Quotations: Sales → Finance → PDF");
+let qid;
 {
-  const p1 = text((await sales.get("/price-check?go=1&code0=WEB-TEST&qty0=7")).html);
-  check("7 pages = RM 5,200 + 2 × RM 500 = RM 6,200", p1.includes("RM 6,200.00") && p1.includes("Priced."), p1.slice(0, 300));
-  const p2 = text((await sales.get("/price-check?go=1&code0=WEB-TEST&qty0=25")).html);
-  check("25 pages (over limit) → needs estimate, not a price", p2.includes("need a technical estimate") && p2.includes("C · Custom"));
-  const p3 = text((await sales.get("/price-check?go=1&code0=WEB-TEST&qty0=5&discount=10&reason=friend+of+boss")).html);
-  check("sales discount refused", p3.includes("Only Finance or Admin can apply discounts"));
-  const p4 = text((await fin1.get("/price-check?go=1&code0=WEB-TEST&qty0=5&discount=10&reason=Repeat+client")).html);
-  check("finance 10% discount applied (RM 5,200 → RM 4,680)", p4.includes("RM 4,680.00"));
-  const p5 = text((await sales.get("/price-check?go=1&code0=WEB-TEST&qty0=5&custom=Sync+orders+to+SAP")).html);
-  check("custom request → estimate request", p5.includes("No approved price for") && p5.includes("Sync orders to SAP"));
+  const s2 = new Browser("sales2");
+  const { link } = await addUser(admin, "Sales Two", "sales2@e2e.local", "sales");
+  await setupAndLogin(s2, link, "sales2@e2e.local");
+
+  const home = await sales.get("/");
+  check("Sales lands on Quotations after sign-in", home.location === "/quotations", home.location);
+  const priceCheck = await sales.get("/price-check");
+  check("Price checker page is gone", priceCheck.status === 404, String(priceCheck.status));
+
+  const c = await sales.post("/api/quotations", { clientCompany: "Demo Trading Sdn Bhd (TEST)", projectTitle: "Corporate website revamp", clientContactName: "Mr Lim", clientContactPhone: "012-000 0000", clientContactEmail: "" });
+  check("Sales creates a quotation", c.ok?.includes("created"), c.error);
+  qid = c.location.split("/quotations/")[1].split("?")[0];
+  const base = `/api/quotations/${qid}`;
+
+  check("another Sales person can't open it", (await s2.get(`/quotations/${qid}`)).status === 404);
+  const sneak = await s2.post(`${base}/add-custom`, { description: "Sneaky", quantity: "1", unitPrice: "1" });
+  check("another Sales person can't edit it", sneak.error?.includes("not found"), sneak.error);
+
+  const a1 = await sales.post(`${base}/add-catalogue`, { catalogueCode: "WEB-TEST", quantity: "7", details: "7 pages" });
+  check("add price-list item", a1.ok === "Item added.", a1.error);
+  const a2 = await sales.post(`${base}/add-custom`, { description: "Enquiry form linked to Google Sheets", quantity: "1", unitPrice: "2,500", unitLabel: "", details: "" });
+  check("add custom item", a2.ok?.includes("Custom item added"), a2.error);
+  const bad = await sales.post(`${base}/add-custom`, { description: "Bad amount", quantity: "1", unitPrice: "abc" });
+  check("bad amount refused", bad.error?.includes("amount like"), bad.error);
+
+  const early = await sales.post(`${base}/submit`, {});
+  check("can't submit without a scope summary", early.error?.includes("scope summary"), early.error);
+  const sc = await sales.post(`${base}/scope`, { scopeSummary: "Design and build a 7-page corporate website.", deliverables: "Responsive website\nTraining", exclusions: "Copywriting", confirmedTimeline: "", internalNotes: "Client is price sensitive" });
+  check("scope saved", sc.ok === "Scope saved.", sc.error);
+
+  const page = text((await sales.get(`/quotations/${qid}`)).html);
+  check("editor shows live total RM 8,700 (6,200 + 2,500)", page.includes("RM 8,700.00"), page.slice(0, 200));
+  const prev = await fetch(BASE + `/quotations/${qid}/pdf?v=1`, { headers: { cookie: sales.cookieHeader() } });
+  check("draft PDF preview downloads", prev.status === 200 && prev.headers.get("content-type") === "application/pdf" && prev.headers.get("content-disposition").includes("DRAFT"));
+
+  const sub = await sales.post(`${base}/submit`, {});
+  check("Sales submits to Finance", sub.ok?.includes("Submitted"), sub.error);
+  const locked = await sales.post(`${base}/add-custom`, { description: "Late item", quantity: "1", unitPrice: "1" });
+  check("items locked after submission", locked.error?.includes("no longer a draft"), locked.error);
+  const selfApprove = await sales.post(`${base}/approve`, {});
+  check("Sales can't approve", selfApprove.error?.includes("permission"), selfApprove.error);
+
+  const inbox = text((await fin1.get("/approvals")).html);
+  check("appears in Finance's Approvals inbox", inbox.includes("Demo Trading Sdn Bhd (TEST)"));
+  const rej = await fin1.post(`${base}/reject`, { note: "Form should be RM 3,000" });
+  check("Finance sends it back with a note", rej.ok?.includes("Sent back"), rej.error);
+  const rev = await sales.post(`${base}/revise`, {});
+  check("Sales starts version 2", rev.ok?.includes("Version 2"), rev.error);
+  const v2 = text((await sales.get(`/quotations/${qid}`)).html);
+  const lineId = (await sales.get(`/quotations/${qid}`)).html.match(/name="lineId" value="([0-9a-f-]{36})"/g)?.[1]?.match(/[0-9a-f-]{36}/)?.[0];
+  await sales.post(`${base}/remove-line`, { lineId });
+  await sales.post(`${base}/add-custom`, { description: "Enquiry form linked to Google Sheets", quantity: "1", unitPrice: "3000" });
+  check("v2 keeps the copied items", v2.includes("Test Website") && v2.includes("Enquiry form"));
+  await sales.post(`${base}/submit`, {});
+  const ok = await fin2.post(`${base}/approve`, { note: "OK" });
+  check("Finance approves v2", ok.ok?.includes("Approved"), ok.error);
+
+  const pdf = await fetch(BASE + `/quotations/${qid}/pdf?v=2`, { headers: { cookie: sales.cookieHeader() } });
+  const bytes = new Uint8Array(await pdf.arrayBuffer());
+  check("client PDF downloads as an attachment", pdf.status === 200 && pdf.headers.get("content-disposition").startsWith("attachment") && !pdf.headers.get("content-disposition").includes("DRAFT"));
+  check("file is a real PDF", new TextDecoder().decode(bytes.slice(0, 5)) === "%PDF-");
+  if (process.env.PDF_OUT) (await import("node:fs")).writeFileSync(`${process.env.PDF_OUT}/e2e-approved.pdf`, bytes);
+  const total = text((await sales.get(`/quotations/${qid}`)).html);
+  check("approved total RM 9,200 (6,200 + 3,000)", total.includes("RM 9,200.00"));
+  const other = await fetch(BASE + `/quotations/${qid}/pdf?v=2`, { headers: { cookie: s2.cookieHeader() } });
+  check("another Sales person can't download the PDF", other.status === 404, String(other.status));
+  const anon = await fetch(BASE + `/quotations/${qid}/pdf?v=2`, { redirect: "manual" });
+  check("signed-out visitor can't download the PDF", anon.status === 303);
+  const audit = text((await fin2.get("/audit")).html);
+  check("PDF download is in the audit log", audit.includes("quote.pdf_downloaded"));
 }
 
 console.log("\n8. Account controls");

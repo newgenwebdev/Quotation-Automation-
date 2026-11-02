@@ -167,3 +167,82 @@ export type User = typeof users.$inferSelect;
 export type Role = User["role"];
 export type CatalogueItem = typeof catalogueItems.$inferSelect;
 export type CommercialPolicy = typeof commercialPolicies.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// QUOTATIONS (Phase 1c)
+//   quotations          → one per client opportunity (number, client, owner, overall status)
+//   quotation_versions  → each revision; holds scope text, frozen totals and the Finance decision
+//   quotation_lines     → priced lines: from the approved price list, or custom (Finance approves)
+// ---------------------------------------------------------------------------
+
+export const quotationStatusEnum = pgEnum("quotation_status", ["draft", "pending_approval", "approved", "rejected", "cancelled"]);
+export const versionStatusEnum = pgEnum("quotation_version_status", ["draft", "submitted", "approved", "rejected", "superseded", "cancelled"]);
+export const lineKindEnum = pgEnum("quotation_line_kind", ["catalogue", "custom"]);
+
+export const quotations = pgTable("quotations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  number: text("number").notNull().unique(), // e.g. NGQ-2026-0001
+  clientCompany: text("client_company").notNull(),
+  clientContactName: text("client_contact_name"),
+  clientContactPhone: text("client_contact_phone"),
+  clientContactEmail: text("client_contact_email"),
+  projectTitle: text("project_title").notNull(),
+  ownerId: uuid("owner_id").notNull().references(() => users.id),
+  status: quotationStatusEnum("status").notNull().default("draft"),
+  currentVersion: integer("current_version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("quotations_owner_idx").on(t.ownerId), index("quotations_status_idx").on(t.status)]);
+
+export type PolicySnapshot = {
+  policyId: string; policyVersion: number; paymentMilestones: PaymentMilestone[];
+  quoteValidityDays: number; tax: { label: string; rateBp: number } | null; termsText: string | null;
+};
+
+export const quotationVersions = pgTable("quotation_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  quotationId: uuid("quotation_id").notNull().references(() => quotations.id),
+  version: integer("version").notNull(),
+  status: versionStatusEnum("status").notNull().default("draft"),
+  scopeSummary: text("scope_summary"),
+  deliverables: jsonb("deliverables").$type<string[]>().notNull().default([]),
+  exclusions: jsonb("exclusions").$type<string[]>().notNull().default([]),
+  /** Only printed when filled in; leave blank unless the timeline is confirmed. */
+  confirmedTimeline: text("confirmed_timeline"),
+  internalNotes: text("internal_notes"),
+  currency: char("currency", { length: 3 }).notNull().default("MYR"),
+  // Frozen at submission by the pricing code (never typed by a person):
+  subtotalSen: bigint("subtotal_sen", { mode: "number" }),
+  taxSen: bigint("tax_sen", { mode: "number" }),
+  totalSen: bigint("total_sen", { mode: "number" }),
+  policySnapshot: jsonb("policy_snapshot").$type<PolicySnapshot>(),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  submittedBy: uuid("submitted_by").references(() => users.id),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  decidedBy: uuid("decided_by").references(() => users.id),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  decisionNote: text("decision_note"),
+  validUntil: date("valid_until"),
+}, (t) => [uniqueIndex("quotation_version_uq").on(t.quotationId, t.version)]);
+
+export const quotationLines = pgTable("quotation_lines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  versionId: uuid("version_id").notNull().references(() => quotationVersions.id),
+  position: integer("position").notNull(),
+  kind: lineKindEnum("kind").notNull(),
+  catalogueItemId: uuid("catalogue_item_id").references(() => catalogueItems.id),
+  catalogueCode: text("catalogue_code"),
+  catalogueVersion: integer("catalogue_version"),
+  description: text("description").notNull(),
+  details: text("details"),
+  quantity: integer("quantity").notNull(),
+  unitLabel: text("unit_label"),
+  /** Custom lines: proposed by Sales, approved by Finance. Catalogue lines: filled by the pricing code. */
+  unitPriceSen: bigint("unit_price_sen", { mode: "number" }),
+  lineTotalSen: bigint("line_total_sen", { mode: "number" }),
+}, (t) => [index("quotation_lines_version_idx").on(t.versionId)]);
+
+export type Quotation = typeof quotations.$inferSelect;
+export type QuotationVersion = typeof quotationVersions.$inferSelect;
+export type QuotationLine = typeof quotationLines.$inferSelect;

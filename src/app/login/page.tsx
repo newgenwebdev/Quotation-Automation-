@@ -5,7 +5,7 @@ import { Messages, type Search } from "@/web/ui";
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage({ searchParams }: { searchParams: Search }) {
-  if (await optionalUser()) redirect("/catalogue");
+  if (await optionalUser()) redirect("/quotations");
   const sp = await searchParams;
   return (
     <div className="center">

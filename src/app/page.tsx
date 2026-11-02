@@ -5,5 +5,5 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const user = await optionalUser();
-  redirect(user ? "/catalogue" : "/login");
+  redirect(user ? "/quotations" : "/login");
 }
