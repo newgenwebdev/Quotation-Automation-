@@ -47,7 +47,29 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   role: roleEnum("role").notNull(),
   active: boolean("active").notNull().default(true),
+  /** scrypt hash. Null until the person opens their setup link and chooses a password. */
+  passwordHash: text("password_hash"),
+  failedLogins: integer("failed_logins").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Logged-in browser sessions. Only a hash of the cookie value is stored. */
+export const sessions = pgTable("sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => [index("sessions_user_idx").on(t.userId)]);
+
+/** One-time links for a new user to set (or reset) their password. Only a hash is stored. */
+export const setupTokens = pgTable("setup_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
 });
 
 export const catalogueItems = pgTable(

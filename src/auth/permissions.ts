@@ -14,6 +14,9 @@ export const PERMISSIONS = {
   "policy.approve": ["finance", "admin"],
   "pricing.calculate": ["sales", "technical", "finance", "admin"],
   "pricing.applyDiscount": ["finance", "admin"],
+  "catalogue.viewDrafts": ["finance", "admin"],
+  "audit.read": ["finance", "admin"],
+  "users.manage": ["admin"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

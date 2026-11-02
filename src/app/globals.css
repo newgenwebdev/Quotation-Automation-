@@ -1,0 +1,60 @@
+:root {
+  --bg: #f6f6f4; --panel: #ffffff; --ink: #1b1d22; --muted: #6b6f78; --line: #e3e3df;
+  --accent: #2346d6; --accent-ink: #ffffff; --ok-bg: #e8f5ec; --ok: #1d6b38;
+  --err-bg: #fdecec; --err: #a12222; --warn-bg: #fff4dc; --warn: #8a5a00;
+  --draft: #8a5a00; --approved: #1d6b38; --retired: #6b6f78;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --panel: #1a1d23; --ink: #e8e8ea; --muted: #9a9fa9; --line: #2b2f37;
+    --accent: #6d8bff; --accent-ink: #0b0d12; --ok-bg: #12301d; --ok: #7fd69c;
+    --err-bg: #3a1616; --err: #ff9a9a; --warn-bg: #3a2c0c; --warn: #f2c66d;
+    --draft: #f2c66d; --approved: #7fd69c; --retired: #9a9fa9;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 24px 0 8px; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+.shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.nav { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 4px; }
+.nav .brand { font-weight: 700; margin-bottom: 2px; }
+.nav .who { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+.nav a { color: var(--ink); text-decoration: none; padding: 7px 10px; border-radius: 8px; }
+.nav a:hover { background: var(--bg); }
+.nav form { margin-top: auto; }
+main { padding: 28px 32px; max-width: 1100px; width: 100%; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.badge.draft { color: var(--draft); } .badge.approved { color: var(--approved); } .badge.retired { color: var(--retired); }
+.msg { padding: 10px 14px; border-radius: 10px; margin-bottom: 16px; }
+.msg.ok { background: var(--ok-bg); color: var(--ok); } .msg.error { background: var(--err-bg); color: var(--err); }
+.msg.warn { background: var(--warn-bg); color: var(--warn); }
+label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
+.hint { font-weight: 400; color: var(--muted); }
+input, select, textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; }
+textarea { min-height: 80px; }
+input[type=checkbox] { width: auto; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 16px; }
+button, .btn { display: inline-block; padding: 9px 16px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+button.secondary, .btn.secondary { background: transparent; color: var(--accent); }
+button.danger { background: transparent; color: var(--err); border-color: var(--err); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; }
+.center { max-width: 400px; margin: 10vh auto; padding: 0 16px; }
+ul.plain { margin: 4px 0; padding-left: 18px; }
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  .nav { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); }
+  .nav .who { width: 100%; margin: 0; } .nav form { margin: 0; }
+  main { padding: 20px 16px; }
+  table { display: block; overflow-x: auto; }
+}
