@@ -9,7 +9,9 @@ import { createCatalogueDraft, approveCatalogueItem, createPolicyDraft, approveP
 import {
   createQuotation, addCatalogueLine, addCustomLine, removeLine, updateScope, submitForApproval, recallSubmission,
   approveQuotation, rejectQuotation, reviseQuotation, cancelQuotation, loadQuote, computeTotals, splitMilestones,
+  updateTerms, loadTerms, previousTermsFor, resolveTermsStatus, describeTerms,
 } from "@/quotations/service";
+import { createTemplate, updateTemplate, listTemplates } from "@/terms/service";
 import { renderQuotationPdf } from "@/quotations/pdf";
 
 const url = process.env.TEST_DATABASE_URL!;
@@ -20,7 +22,7 @@ beforeAll(async () => { ({ db, pool } = createDb(url)); await migrate(db, { migr
 afterAll(async () => { await pool.end(); });
 
 beforeEach(async () => {
-  await db.execute(sql`TRUNCATE audit_log, quotation_lines, quotation_versions, quotations, catalogue_items, commercial_policies, users RESTART IDENTITY CASCADE`);
+  await db.execute(sql`TRUNCATE audit_log, quotation_lines, quotation_versions, quotations, terms_templates, catalogue_items, commercial_policies, users RESTART IDENTITY CASCADE`);
   const rows = await db.insert(users).values([
     { email: "s@t.local", name: "Sally Sales", role: "sales" }, { email: "s2@t.local", name: "Sam Sales", role: "sales" },
     { email: "t@t.local", name: "Tech", role: "technical" }, { email: "f1@t.local", name: "Fin One", role: "finance" },
@@ -53,8 +55,12 @@ async function readyQuote(actor = A.sales) {
   await addCatalogueLine(db, actor, q.id, { catalogueCode: "WEB-TEST", quantity: 7, details: "Home, About, Services x3, Contact, Careers" });
   await addCustomLine(db, actor, q.id, { description: "Stock enquiry form linked to Google Sheets", quantity: 1, unitPriceSen: 250_000 });
   await updateScope(db, actor, q.id, { scopeSummary: "Design and build a 7-page corporate website with an enquiry form.", deliverables: ["Responsive website", "Admin training session"], exclusions: ["Copywriting", "Photography"] });
+  await updateTerms(db, actor, q.id, TEST_TERMS);
   return q;
 }
+
+/** Fictional test wording only. */
+const TEST_TERMS = "1. TEST CLAUSE: deposit is payable before work starts.\n2. TEST CLAUSE: two revision rounds are included.";
 
 describe("Creating a quotation", () => {
   it("gets a sequential number and starts as draft v1", async () => {
@@ -103,6 +109,7 @@ describe("Lines", () => {
     await addCustomLine(db, A.sales, q.id, { description: "Custom inventory system", quantity: 1, unitPriceSen: 3_000_000 });
     await addCatalogueLine(db, A.sales, q.id, { catalogueCode: "HOST-TEST", quantity: 2 });
     await updateScope(db, A.sales, q.id, { scopeSummary: "Custom system plus hosting." });
+    await updateTerms(db, A.sales, q.id, TEST_TERMS);
     const v = await submitForApproval(db, A.sales, q.id);
     expect(v.totalSen).toBe(3_000_000 + 300_000);
   });
@@ -133,12 +140,14 @@ describe("Approval workflow", () => {
     expect(ok.validUntil).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it("can't submit without lines, scope or approved payment terms", async () => {
+  it("can't submit without lines, scope, terms & conditions or approved payment terms", async () => {
     const q = await createQuotation(db, A.sales, { clientCompany: "C Co", projectTitle: "Project one" });
     await expect(submitForApproval(db, A.sales, q.id)).rejects.toMatchObject({ code: "NO_LINES" });
     await addCustomLine(db, A.sales, q.id, { description: "Something custom", quantity: 1, unitPriceSen: 100_000 });
     await expect(submitForApproval(db, A.sales, q.id)).rejects.toMatchObject({ code: "NO_SCOPE" });
     await updateScope(db, A.sales, q.id, { scopeSummary: "Something." });
+    await expect(submitForApproval(db, A.sales, q.id)).rejects.toMatchObject({ code: "NO_TERMS" });
+    await updateTerms(db, A.sales, q.id, TEST_TERMS);
     await expect(submitForApproval(db, A.sales, q.id)).rejects.toMatchObject({ code: "NO_POLICY" });
   });
 
@@ -218,6 +227,105 @@ describe("Database safety nets", () => {
     await err(db.update(quotationVersions).set({ totalSen: 1 }).where(eq(quotationVersions.id, b.version.id)));
     await err(db.update(quotationLines).set({ lineTotalSen: 1 }).where(eq(quotationLines.versionId, b.version.id)));
     await err(db.delete(quotationLines).where(eq(quotationLines.versionId, b.version.id)));
+  });
+});
+
+describe("Terms & conditions", () => {
+  const STANDARD = "1. TEST standard clause one.\n2. TEST standard clause two.";
+  const GLC = "1. TEST GLC clause: payment within 60 days of invoice.";
+
+  it("only Finance/Admin manage templates; names are unique; one default at a time", async () => {
+    await expect(createTemplate(db, A.sales, { name: "Sneaky", body: STANDARD })).rejects.toThrow(/not allowed/);
+    const t1 = await createTemplate(db, A.fin1, { name: "Standard (TEST)", body: STANDARD, isDefault: true });
+    await expect(createTemplate(db, A.fin2, { name: "standard (test)", body: GLC })).rejects.toMatchObject({ code: "NAME_TAKEN" });
+    const t2 = await createTemplate(db, A.fin2, { name: "GLC (TEST)", body: GLC, isDefault: true });
+    const all = await listTemplates(db);
+    expect(all.filter((t) => t.isDefault).map((t) => t.id)).toEqual([t2.id]);
+    // Retiring the default leaves no default.
+    await updateTemplate(db, A.fin1, t2.id, { name: t2.name, body: t2.body, isDefault: true, active: false });
+    expect((await listTemplates(db)).some((t) => t.isDefault)).toBe(false);
+    expect((await listTemplates(db, { activeOnly: true })).map((t) => t.id)).toEqual([t1.id]);
+  });
+
+  it("new quotations start with the default template; Sales can adjust them per client", async () => {
+    const t = await createTemplate(db, A.fin1, { name: "Standard (TEST)", body: STANDARD, isDefault: true });
+    const q = await createQuotation(db, A.sales, { clientCompany: "Client A", projectTitle: "Website" });
+    let b = (await loadQuote(db, A.sales, q.id))!;
+    expect(b.version.termsText).toBe(STANDARD);
+    expect(describeTerms((await resolveTermsStatus(db, [b.version])).get(b.version.id))).toMatchObject({ short: "Standard", review: false });
+
+    await updateTerms(db, A.sales, q.id, STANDARD + "\n3. TEST client-specific clause.");
+    b = (await loadQuote(db, A.sales, q.id))!;
+    const s = describeTerms((await resolveTermsStatus(db, [b.version])).get(b.version.id));
+    expect(s).toMatchObject({ short: "Edited", review: true });
+    expect(s.label).toContain(t.name);
+
+    // Changing the template later doesn't touch the quotation's own copy.
+    await updateTemplate(db, A.fin2, t.id, { name: t.name, body: "TEST completely new wording.", isDefault: true });
+    expect((await loadQuote(db, A.sales, q.id))!.version.termsText).toContain("client-specific");
+  });
+
+  it("loading a template or this client's earlier approved terms replaces the text", async () => {
+    await setupPrices();
+    const glc = await createTemplate(db, A.fin1, { name: "GLC (TEST)", body: GLC });
+    const q1 = await readyQuote();
+    await loadTerms(db, A.sales, q1.id, { kind: "template", templateId: glc.id });
+    expect((await loadQuote(db, A.sales, q1.id))!.version.termsText).toBe(GLC);
+    await submitForApproval(db, A.sales, q1.id);
+    await approveQuotation(db, A.fin1, q1.id);
+
+    // A new quotation for the same client (spelt slightly differently) offers q1's approved terms.
+    const q2 = await createQuotation(db, A.sales, { clientCompany: "DEMO TRADING SDN. BHD. (test)", projectTitle: "Phase 2" });
+    const prev = await previousTermsFor(db, A.sales, q2);
+    expect(prev).toHaveLength(1);
+    await loadTerms(db, A.sales, q2.id, { kind: "previous", versionId: prev[0].versionId });
+    const v2 = (await loadQuote(db, A.sales, q2.id))!.version;
+    expect(v2.termsText).toBe(GLC);
+    expect(describeTerms((await resolveTermsStatus(db, [v2])).get(v2.id))).toMatchObject({ short: "Same as before", review: false });
+
+    // Another salesperson can't see or load them.
+    const q3 = await createQuotation(db, A.sales2, { clientCompany: "Demo Trading Sdn Bhd (TEST)", projectTitle: "Other" });
+    expect(await previousTermsFor(db, A.sales2, q3)).toHaveLength(0);
+    await expect(loadTerms(db, A.sales2, q3.id, { kind: "previous", versionId: prev[0].versionId })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("an inactive template can't be loaded", async () => {
+    const t = await createTemplate(db, A.fin1, { name: "Old (TEST)", body: GLC });
+    await updateTemplate(db, A.fin1, t.id, { name: t.name, body: t.body, active: false });
+    const q = await createQuotation(db, A.sales, { clientCompany: "Client B", projectTitle: "Site" });
+    await expect(loadTerms(db, A.sales, q.id, { kind: "template", templateId: t.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("terms are locked after submission (app and database) and carried into revisions", async () => {
+    await setupPrices();
+    const q = await readyQuote();
+    await submitForApproval(db, A.sales, q.id);
+    await expect(updateTerms(db, A.sales, q.id, "TEST changed")).rejects.toMatchObject({ code: "NOT_DRAFT" });
+    const b = (await loadQuote(db, A.sales, q.id))!;
+    await expect(db.update(quotationVersions).set({ termsText: "tampered" }).where(eq(quotationVersions.id, b.version.id)))
+      .rejects.toSatisfy((e: unknown) => String((e as { cause?: Error }).cause?.message ?? e).includes("FROZEN_QUOTATION"));
+    await rejectQuotation(db, A.fin1, q.id, "Please change clause 2");
+    await reviseQuotation(db, A.sales, q.id);
+    expect((await loadQuote(db, A.sales, q.id))!.version.termsText).toBe(TEST_TERMS);
+  });
+
+  it("long terms flow onto extra pages in the PDF", async () => {
+    await setupPrices();
+    const q = await readyQuote();
+    const long = Array.from({ length: 70 }, (_, i) => `${i + 1}. TEST clause ${i + 1}: this is a deliberately long line of wording to check that the PDF wraps and paginates terms properly.`).join("\n");
+    await updateTerms(db, A.sales, q.id, long);
+    const pdf = await renderQuotationPdf((await loadQuote(db, A.sales, q.id))!);
+    const pages = Number(pdf.toString("latin1").match(/\/Type \/Pages[\s\S]*?\/Count (\d+)/)?.[1]);
+    expect(pages).toBeGreaterThanOrEqual(2);
+    expect(pages).toBeLessThanOrEqual(4);
+    if (process.env.PDF_OUT) writeFileSync(`${process.env.PDF_OUT}/long-terms.pdf`, pdf);
+  });
+
+  it("terms are audited", async () => {
+    const q = await createQuotation(db, A.sales, { clientCompany: "Client C", projectTitle: "App" });
+    await updateTerms(db, A.sales, q.id, TEST_TERMS);
+    const actions = (await db.select().from(auditLog).where(eq(auditLog.entityId, q.id))).map((r) => r.action);
+    expect(actions).toContain("quote.terms_updated");
   });
 });
 

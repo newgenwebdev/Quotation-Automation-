@@ -43,7 +43,13 @@ class Browser {
 }
 
 const PW = "Test-password-123";
-const text = (html) => html.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const text = (html) => html.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const pdfText = async (bytes) => {
+  try {
+    const { execFileSync } = await import("node:child_process");
+    return execFileSync("pdftotext", ["-layout", "-", "-"], { input: Buffer.from(bytes) }).toString();
+  } catch { return null; } // pdftotext not installed: skip text checks
+};
 
 async function setupAndLogin(b, setupUrl, email) {
   const token = new URL(setupUrl).pathname.split("/").pop();
@@ -164,6 +170,25 @@ console.log("\n6. Payment terms");
   check("second finance person approves terms", ok.ok?.includes("in force"), ok.error);
 }
 
+console.log("\n6b. T&C templates (Finance)");
+let glcTemplateId;
+{
+  const r = await sales.get("/terms");
+  check("Sales can't open T&C templates", r.location?.includes("access"), `${r.status} ${r.location}`);
+  check("Sales menu has no T&C templates link", !text((await sales.get("/quotations")).html).includes("T&C templates"));
+  const sneak = await sales.post("/api/terms", { name: "Sneaky", body: "TEST sneaky terms here." });
+  check("Sales can't create a template by posting directly", sneak.error?.includes("permission"), sneak.error);
+  const t1 = await fin1.post("/api/terms", { name: "Website projects (TEST)", body: "1. TEST: 50% deposit before work starts.\n2. TEST: two revision rounds included.", isDefault: "on" });
+  check("Finance adds a default template", t1.ok?.includes("New quotations will start with it"), t1.error);
+  const t2 = await fin2.post("/api/terms", { name: "Government / GLC (TEST)", body: "1. TEST: payment within 60 days of invoice.\n2. TEST: three revision rounds included." });
+  check("Finance adds a second template", t2.ok?.includes("saved"), t2.error);
+  const dup = await fin1.post("/api/terms", { name: "website PROJECTS (test)", body: "TEST duplicate name body." });
+  check("duplicate template name refused", dup.error?.includes("already exists"), dup.error);
+  const list = (await fin1.get("/terms")).html;
+  glcTemplateId = list.match(/href="\/terms\/([0-9a-f-]{36})">Government/)?.[1];
+  check("templates listed, default marked", text(list).includes("default for new quotations") && !!glcTemplateId);
+}
+
 console.log("\n7. Quotations: Sales → Finance → PDF");
 let qid;
 {
@@ -197,6 +222,20 @@ let qid;
   const sc = await sales.post(`${base}/scope`, { scopeSummary: "Design and build a 7-page corporate website.", deliverables: "Responsive website\nTraining", exclusions: "Copywriting", confirmedTimeline: "", internalNotes: "Client is price sensitive" });
   check("scope saved", sc.ok === "Scope saved.", sc.error);
 
+  // Terms & conditions: starts with the default template, Sales tailors them for this client.
+  let editor = text((await sales.get(`/quotations/${qid}`)).html);
+  check("new quotation starts with the default T&C", editor.includes("TEST: 50% deposit before work starts") && editor.includes('Standard "Website projects (TEST)" template, unchanged'));
+  await sales.post(`${base}/terms`, { termsText: "" });
+  const noTerms = await sales.post(`${base}/submit`, {});
+  check("can't submit without terms & conditions", noTerms.error?.includes("terms & conditions"), noTerms.error);
+  check("GLC template offered in the editor", (await sales.get(`/quotations/${qid}`)).html.includes(`value="t:${glcTemplateId}"`));
+  const lt = await sales.post(`${base}/load-terms`, { source: `t:${glcTemplateId}` });
+  check("Sales switches to the GLC template", lt.ok?.includes("replaced"), lt.error);
+  const st = await sales.post(`${base}/terms`, { termsText: "1. TEST: payment within 60 days of invoice.\n2. TEST: three revision rounds included.\n3. TEST: hosting billed annually for this client." });
+  check("Sales adjusts the terms for this client", st.ok === "Terms & conditions saved.", st.error);
+  editor = text((await sales.get(`/quotations/${qid}`)).html);
+  check("editor shows the terms were edited from the template", editor.includes('Edited from the "Government / GLC (TEST)" template'));
+
   const page = text((await sales.get(`/quotations/${qid}`)).html);
   check("editor shows live total RM 8,700 (6,200 + 2,500)", page.includes("RM 8,700.00"), page.slice(0, 200));
   const prev = await fetch(BASE + `/quotations/${qid}/pdf?v=1`, { headers: { cookie: sales.cookieHeader() } });
@@ -206,11 +245,16 @@ let qid;
   check("Sales submits to Finance", sub.ok?.includes("Submitted"), sub.error);
   const locked = await sales.post(`${base}/add-custom`, { description: "Late item", quantity: "1", unitPrice: "1" });
   check("items locked after submission", locked.error?.includes("no longer a draft"), locked.error);
+  const lockedTerms = await sales.post(`${base}/terms`, { termsText: "TEST sneaky late change" });
+  check("terms locked after submission", lockedTerms.error?.includes("no longer a draft"), lockedTerms.error);
   const selfApprove = await sales.post(`${base}/approve`, {});
   check("Sales can't approve", selfApprove.error?.includes("permission"), selfApprove.error);
 
   const inbox = text((await fin1.get("/approvals")).html);
   check("appears in Finance's Approvals inbox", inbox.includes("Demo Trading Sdn Bhd (TEST)"));
+  check("inbox flags the T&C as edited", inbox.includes("Edited"));
+  const review = text((await fin1.get(`/quotations/${qid}`)).html);
+  check("Finance is told to read the edited terms", review.includes("Please read them below before approving") && review.includes("hosting billed annually"));
   const rej = await fin1.post(`${base}/reject`, { note: "Form should be RM 3,000" });
   check("Finance sends it back with a note", rej.ok?.includes("Sent back"), rej.error);
   const rev = await sales.post(`${base}/revise`, {});
@@ -220,6 +264,7 @@ let qid;
   await sales.post(`${base}/remove-line`, { lineId });
   await sales.post(`${base}/add-custom`, { description: "Enquiry form linked to Google Sheets", quantity: "1", unitPrice: "3000" });
   check("v2 keeps the copied items", v2.includes("Test Website") && v2.includes("Enquiry form"));
+  check("v2 keeps this client's terms", v2.includes("hosting billed annually"));
   await sales.post(`${base}/submit`, {});
   const ok = await fin2.post(`${base}/approve`, { note: "OK" });
   check("Finance approves v2", ok.ok?.includes("Approved"), ok.error);
@@ -229,6 +274,11 @@ let qid;
   check("client PDF downloads as an attachment", pdf.status === 200 && pdf.headers.get("content-disposition").startsWith("attachment") && !pdf.headers.get("content-disposition").includes("DRAFT"));
   check("file is a real PDF", new TextDecoder().decode(bytes.slice(0, 5)) === "%PDF-");
   if (process.env.PDF_OUT) (await import("node:fs")).writeFileSync(`${process.env.PDF_OUT}/e2e-approved.pdf`, bytes);
+  const pt = await pdfText(bytes);
+  if (pt !== null) {
+    check("PDF prints this client's terms & conditions", pt.includes("Terms & conditions") && pt.includes("hosting billed annually for this client") && pt.includes("60 days of invoice"));
+    check("PDF has no leftover default-template wording", !pt.includes("50% deposit before work starts"));
+  }
   const total = text((await sales.get(`/quotations/${qid}`)).html);
   check("approved total RM 9,200 (6,200 + 3,000)", total.includes("RM 9,200.00"));
   const other = await fetch(BASE + `/quotations/${qid}/pdf?v=2`, { headers: { cookie: s2.cookieHeader() } });
@@ -237,6 +287,22 @@ let qid;
   check("signed-out visitor can't download the PDF", anon.status === 303);
   const audit = text((await fin2.get("/audit")).html);
   check("PDF download is in the audit log", audit.includes("quote.pdf_downloaded"));
+
+  // Next quotation for the same client (spelt a little differently) can reuse the approved terms.
+  const c2 = await sales.post("/api/quotations", { clientCompany: "DEMO TRADING SDN. BHD. (test)", projectTitle: "Phase 2 maintenance" });
+  const q2 = c2.location.split("/quotations/")[1].split("?")[0];
+  const q2html = (await sales.get(`/quotations/${q2}`)).html;
+  const prevId = q2html.match(/value="q:([0-9a-f-]{36})"/)?.[1];
+  check("this client's approved terms are offered on the next quotation", text(q2html).includes("Approved before for") && !!prevId);
+  const reuse = await sales.post(`/api/quotations/${q2}/load-terms`, { source: `q:${prevId}` });
+  check("Sales reuses them", reuse.ok?.includes("replaced"), reuse.error);
+  const q2text = text((await sales.get(`/quotations/${q2}`)).html);
+  check("marked as the same terms approved before", q2text.includes("Same terms as approved in") && q2text.includes("hosting billed annually"));
+  const c3 = await s2.post("/api/quotations", { clientCompany: "Demo Trading Sdn Bhd (TEST)", projectTitle: "Other salesperson" });
+  const q3 = c3.location.split("/quotations/")[1].split("?")[0];
+  check("another salesperson isn't offered someone else's client terms", !text((await s2.get(`/quotations/${q3}`)).html).includes("Approved before for"));
+  const steal = await s2.post(`/api/quotations/${q3}/load-terms`, { source: `q:${prevId}` });
+  check("…and can't load them by posting directly", steal.error?.includes("aren't available"), steal.error);
 }
 
 console.log("\n8. Account controls");

@@ -2,7 +2,8 @@ import { notFound } from "next/navigation";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { auditLog, catalogueItems, users } from "@/db/schema";
 import { can } from "@/auth/permissions";
-import { canEdit, computeTotals, loadQuote, splitMilestones } from "@/quotations/service";
+import { canEdit, computeTotals, describeTerms, loadQuote, previousTermsFor, resolveTermsStatus, splitMilestones } from "@/quotations/service";
+import { listTemplates } from "@/terms/service";
 import { db, requireUser } from "@/web/server";
 import { List, Messages, Money, fmtDate, fmtDateTime, one, type Search } from "@/web/ui";
 import { QuoteStatus } from "@/web/quote-ui";
@@ -13,7 +14,8 @@ const ACTION_LABEL: Record<string, string> = {
   "quote.line_added": "Line added", "quote.line_removed": "Line removed", "quote.submitted": "Submitted to Finance",
   "quote.recalled": "Recalled to draft", "quote.approved": "Approved by Finance", "quote.rejected": "Sent back by Finance",
   "quote.revised": "New version started", "quote.cancelled": "Cancelled", "quote.pdf_downloaded": "Client PDF downloaded",
-  "quote.pdf_preview": "Draft preview opened",
+  "quote.pdf_preview": "Draft preview opened", "quote.terms_updated": "Terms & conditions edited",
+  "quote.terms_loaded": "Terms & conditions replaced",
 };
 
 export default async function QuotationPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Search }) {
@@ -39,6 +41,10 @@ export default async function QuotationPage({ params, searchParams }: { params: 
   const history = await db().select().from(auditLog)
     .where(and(eq(auditLog.entityType, "quotation"), eq(auditLog.entityId, q.id), inArray(auditLog.action, Object.keys(ACTION_LABEL))))
     .orderBy(desc(auditLog.id)).limit(50);
+
+  const terms = describeTerms((await resolveTermsStatus(db(), [v])).get(v.id));
+  const templates = editable ? await listTemplates(db(), { activeOnly: true }) : [];
+  const previousTerms = editable ? await previousTermsFor(db(), user, q) : [];
 
   const frozen = v.totalSen !== null;
   const preview = computeTotals(lines, v.policySnapshot?.tax ?? null);
@@ -101,6 +107,12 @@ export default async function QuotationPage({ params, searchParams }: { params: 
             <a className="btn secondary" href={`/quotations/${q.id}/pdf?v=${v.version}`}>Preview PDF (draft)</a>
             {isOwner && <form method="post" action={`${base}/recall`}><button type="submit" className="secondary">Recall to edit</button></form>}
           </div>
+          {approver && (
+            <p className={`msg ${terms.review ? "warn" : "ok"}`} style={{ marginTop: 12, marginBottom: 0 }}>
+              Terms &amp; conditions: <strong>{terms.label}</strong>.
+              {terms.review ? " Please read them below before approving." : ""}
+            </p>
+          )}
           {approver && (
             selfBlocked
               ? <p className="msg warn" style={{ marginTop: 12 }}>You prepared or submitted this, so another Finance or Admin person must decide.</p>
@@ -236,6 +248,47 @@ export default async function QuotationPage({ params, searchParams }: { params: 
         </div>
       )}
 
+      {/* ---------- Terms & conditions ---------- */}
+      <h2>Terms &amp; conditions</h2>
+      {editable ? (
+        <div className="panel">
+          <p className="muted" style={{ marginTop: 0 }}>{terms.label}.</p>
+          {templates.length > 0 || previousTerms.length > 0 ? (
+            <form method="post" action={`${base}/load-terms`}>
+              <label htmlFor="terms-source">Start from <span className="hint">replaces the text below</span></label>
+              <div className="row">
+                <select id="terms-source" name="source" required defaultValue="" style={{ flex: 1, width: "auto" }}>
+                  <option value="" disabled>Choose a template or this client's earlier terms…</option>
+                  {templates.length > 0 && (
+                    <optgroup label="T&C templates">
+                      {templates.map((t) => <option key={t.id} value={`t:${t.id}`}>{t.name}{t.isDefault ? " (default)" : ""}</option>)}
+                    </optgroup>
+                  )}
+                  {previousTerms.length > 0 && (
+                    <optgroup label={`Approved before for ${q.clientCompany}`}>
+                      {previousTerms.map((p) => <option key={p.versionId} value={`q:${p.versionId}`}>{p.number} v{p.version} · approved {fmtDate(p.decidedAt)}</option>)}
+                    </optgroup>
+                  )}
+                </select>
+                <button type="submit" className="secondary">Use these terms</button>
+              </div>
+            </form>
+          ) : (
+            <p className="muted">No T&amp;C templates yet. Finance can add them under <strong>T&amp;C templates</strong>, or write the terms below.</p>
+          )}
+          <form method="post" action={`${base}/terms`}>
+            <label htmlFor="termsText">Terms for this client <span className="hint">printed on the quotation; adjust them for this client if needed</span></label>
+            <textarea id="termsText" name="termsText" rows={12} defaultValue={v.termsText ?? ""} />
+            <p><button type="submit" className="secondary">Save terms</button></p>
+          </form>
+        </div>
+      ) : (
+        <div className="panel">
+          <p className="muted" style={{ marginTop: 0 }}>{terms.label}.</p>
+          {v.termsText ? <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{v.termsText}</p> : null}
+        </div>
+      )}
+
       {frozen && v.policySnapshot && (
         <>
           <h2>Payment schedule</h2>
@@ -256,7 +309,7 @@ export default async function QuotationPage({ params, searchParams }: { params: 
             <form method="post" action={`${base}/submit`}><button type="submit">Submit to Finance for approval</button></form>
             <a className="btn secondary" href={`/quotations/${q.id}/pdf?v=${v.version}`}>Preview PDF (draft)</a>
           </div>
-          <p className="muted">Once submitted, items and amounts are locked until Finance decides.</p>
+          <p className="muted">Once submitted, items, amounts and terms are locked until Finance decides.</p>
         </div>
       )}
       {isCurrent && q.status !== "cancelled" && (isOwner || approver) && (

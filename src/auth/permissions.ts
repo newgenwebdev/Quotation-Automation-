@@ -21,6 +21,7 @@ export const PERMISSIONS = {
   /** Sales see only their own quotations; these roles see everyone's. */
   "quotes.viewAll": ["technical", "finance", "admin"],
   "quotes.approve": ["finance", "admin"],
+  "terms.manage": ["finance", "admin"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

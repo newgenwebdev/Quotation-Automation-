@@ -175,6 +175,25 @@ export type CommercialPolicy = typeof commercialPolicies.$inferSelect;
 //   quotation_lines     → priced lines: from the approved price list, or custom (Finance approves)
 // ---------------------------------------------------------------------------
 
+/**
+ * Reusable terms & conditions wording, maintained by Finance/Admin.
+ * A quotation copies the text when a template is chosen, so later template edits
+ * never change a quotation that was already sent.
+ */
+export const termsTemplates = pgTable("terms_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  body: text("body").notNull(),
+  /** Pre-filled into every new quotation. At most one (enforced by the database). */
+  isDefault: boolean("is_default").notNull().default(false),
+  active: boolean("active").notNull().default(true),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export type TermsTemplate = typeof termsTemplates.$inferSelect;
+
 export const quotationStatusEnum = pgEnum("quotation_status", ["draft", "pending_approval", "approved", "rejected", "cancelled"]);
 export const versionStatusEnum = pgEnum("quotation_version_status", ["draft", "submitted", "approved", "rejected", "superseded", "cancelled"]);
 export const lineKindEnum = pgEnum("quotation_line_kind", ["catalogue", "custom"]);
@@ -210,6 +229,12 @@ export const quotationVersions = pgTable("quotation_versions", {
   /** Only printed when filled in; leave blank unless the timeline is confirmed. */
   confirmedTimeline: text("confirmed_timeline"),
   internalNotes: text("internal_notes"),
+  /** This client's terms & conditions, as printed on the PDF. Frozen once submitted. */
+  termsText: text("terms_text"),
+  /** Where the terms came from, so Finance can see what changed: a template… */
+  termsTemplateId: uuid("terms_template_id").references(() => termsTemplates.id),
+  /** …or a previously approved quotation version for the same client. */
+  termsSourceVersionId: uuid("terms_source_version_id").references((): AnyPgColumn => quotationVersions.id),
   currency: char("currency", { length: 3 }).notNull().default("MYR"),
   // Frozen at submission by the pricing code (never typed by a person):
   subtotalSen: bigint("subtotal_sen", { mode: "number" }),

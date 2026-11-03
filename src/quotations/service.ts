@@ -17,12 +17,13 @@
  *  - Submitted/approved/rejected versions are frozen by the database itself.
  */
 import { z } from "zod";
-import { and, asc, eq, inArray, max, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, max, ne, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import {
-  quotations, quotationVersions, quotationLines, catalogueItems,
+  quotations, quotationVersions, quotationLines, catalogueItems, termsTemplates,
   type Quotation, type QuotationVersion, type QuotationLine, type PolicySnapshot,
 } from "@/db/schema";
+import { MAX_TERMS_LENGTH, normaliseTerms } from "@/terms/service";
 import { assertCan, can, PermissionError, type Actor } from "@/auth/permissions";
 import { writeAudit } from "@/audit/log";
 import { calculatePrice, percentOf } from "@/pricing/engine";
@@ -106,7 +107,12 @@ export async function createQuotation(db: DB, actor: Actor, raw: z.input<typeof 
     const [{ n }] = (await tx.execute(sql`SELECT nextval('quotation_number_seq')::int AS n`)).rows as { n: number }[];
     const number = `NGQ-${today().slice(0, 4)}-${String(n).padStart(4, "0")}`;
     const [quotation] = await tx.insert(quotations).values({ ...input, number, ownerId: actor.id }).returning();
-    await tx.insert(quotationVersions).values({ quotationId: quotation.id, version: 1, createdBy: actor.id });
+    // Start with Finance's default T&C template, if one is set. Sales can change it per client.
+    const [def] = await tx.select().from(termsTemplates).where(and(eq(termsTemplates.isDefault, true), eq(termsTemplates.active, true)));
+    await tx.insert(quotationVersions).values({
+      quotationId: quotation.id, version: 1, createdBy: actor.id,
+      termsText: def?.body ?? null, termsTemplateId: def?.id ?? null,
+    });
     await writeAudit(tx, actor, { action: "quote.created", entityType: "quotation", entityId: quotation.id, after: { number, clientCompany: input.clientCompany, projectTitle: input.projectTitle } });
     return quotation;
   });
@@ -248,6 +254,7 @@ export async function submitForApproval(db: DB, actor: Actor, quotationId: strin
     const lines = await tx.select().from(quotationLines).where(eq(quotationLines.versionId, version.id)).orderBy(asc(quotationLines.position));
     if (lines.length === 0) throw new QuoteError("NO_LINES", "Add at least one line before submitting.");
     if (!version.scopeSummary) throw new QuoteError("NO_SCOPE", "Write a short scope summary before submitting.");
+    if (!version.termsText?.trim()) throw new QuoteError("NO_TERMS", "Add the terms & conditions before submitting (choose a template or write them).");
 
     const policy = await loadActivePolicy(tx as unknown as DB);
     if (!policy || policy.validFrom > today() || (policy.validTo && policy.validTo < today()) || policy.quoteValidityDays === null) {
@@ -344,6 +351,7 @@ export async function reviseQuotation(db: DB, actor: Actor, quotationId: string)
       quotationId, version: next, createdBy: actor.id,
       scopeSummary: version.scopeSummary, deliverables: version.deliverables, exclusions: version.exclusions,
       confirmedTimeline: version.confirmedTimeline, internalNotes: version.internalNotes,
+      termsText: version.termsText, termsTemplateId: version.termsTemplateId, termsSourceVersionId: version.termsSourceVersionId,
     }).returning();
     const oldLines = await tx.select().from(quotationLines).where(eq(quotationLines.versionId, version.id)).orderBy(asc(quotationLines.position));
     for (const l of oldLines) {
@@ -368,6 +376,119 @@ export async function cancelQuotation(db: DB, actor: Actor, quotationId: string,
     await tx.update(quotations).set({ status: "cancelled", updatedAt: new Date() }).where(eq(quotations.id, quotationId));
     await writeAudit(tx, actor, { action: "quote.cancelled", entityType: "quotation", entityId: quotationId, reason: reason.trim() });
   });
+}
+
+// ---------- Terms & conditions ----------
+
+/** Save the terms Sales wrote or adjusted for this client. */
+export async function updateTerms(db: DB, actor: Actor, quotationId: string, raw: string) {
+  const termsText = normaliseTerms(raw);
+  if (termsText.length > MAX_TERMS_LENGTH) throw new QuoteError("TOO_LONG", `Terms & conditions are too long (max ${MAX_TERMS_LENGTH.toLocaleString()} characters).`);
+  return db.transaction(async (tx) => {
+    const { quotation, version } = await loadForUpdate(tx, actor, quotationId);
+    assertEditable(actor, quotation, version);
+    if (normaliseTerms(version.termsText) === termsText) return;
+    // Clearing the box also forgets where the old terms came from.
+    const patch = termsText === "" ? { termsText: null, termsTemplateId: null, termsSourceVersionId: null } : { termsText };
+    await tx.update(quotationVersions).set(patch).where(eq(quotationVersions.id, version.id));
+    await tx.update(quotations).set({ updatedAt: new Date() }).where(eq(quotations.id, quotationId));
+    await writeAudit(tx, actor, { action: "quote.terms_updated", entityType: "quotation", entityId: quotationId, before: { termsText: version.termsText }, after: { termsText: patch.termsText }, reason: `v${version.version}` });
+  });
+}
+
+export type TermsSource = { kind: "template"; templateId: string } | { kind: "previous"; versionId: string };
+
+/** Replace the terms with a template, or with the terms this client was approved for before. */
+export async function loadTerms(db: DB, actor: Actor, quotationId: string, source: TermsSource) {
+  return db.transaction(async (tx) => {
+    const { quotation, version } = await loadForUpdate(tx, actor, quotationId);
+    assertEditable(actor, quotation, version);
+    let patch: Pick<QuotationVersion, "termsText" | "termsTemplateId" | "termsSourceVersionId">;
+    let from: string;
+    if (source.kind === "template") {
+      const [t] = await tx.select().from(termsTemplates).where(and(eq(termsTemplates.id, source.templateId), eq(termsTemplates.active, true)));
+      if (!t) throw new QuoteError("NOT_FOUND", "That T&C template isn't available any more.");
+      patch = { termsText: t.body, termsTemplateId: t.id, termsSourceVersionId: null };
+      from = `template "${t.name}"`;
+    } else {
+      const [row] = await tx.select({ v: quotationVersions, q: quotations }).from(quotationVersions)
+        .innerJoin(quotations, eq(quotations.id, quotationVersions.quotationId))
+        .where(eq(quotationVersions.id, source.versionId));
+      // Only Finance-approved terms, and only from quotations this person is allowed to see.
+      if (!row || !canView(actor, row.q) || row.v.status !== "approved" || !row.v.termsText) {
+        throw new QuoteError("NOT_FOUND", "Those terms aren't available.");
+      }
+      patch = { termsText: row.v.termsText, termsTemplateId: null, termsSourceVersionId: row.v.id };
+      from = `${row.q.number} v${row.v.version}`;
+    }
+    await tx.update(quotationVersions).set(patch).where(eq(quotationVersions.id, version.id));
+    await tx.update(quotations).set({ updatedAt: new Date() }).where(eq(quotations.id, quotationId));
+    await writeAudit(tx, actor, { action: "quote.terms_loaded", entityType: "quotation", entityId: quotationId, before: { termsText: version.termsText }, after: { termsText: patch.termsText }, reason: `From ${from}` });
+  });
+}
+
+/** "ABC Sdn. Bhd." and "abc sdn bhd" are the same client. */
+export function clientKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Approved terms from this client's earlier quotations that this person can see (newest first). */
+export async function previousTermsFor(db: DB, actor: Actor, quotation: Quotation) {
+  return db.select({ versionId: quotationVersions.id, number: quotations.number, version: quotationVersions.version, decidedAt: quotationVersions.decidedAt })
+    .from(quotationVersions)
+    .innerJoin(quotations, eq(quotations.id, quotationVersions.quotationId))
+    .where(and(
+      eq(quotationVersions.status, "approved"),
+      isNotNull(quotationVersions.termsText),
+      ne(quotations.id, quotation.id),
+      sql`regexp_replace(lower(${quotations.clientCompany}), '[^a-z0-9]', '', 'g') = ${clientKey(quotation.clientCompany)}`,
+      can(actor, "quotes.viewAll") ? undefined : eq(quotations.ownerId, actor.id),
+    ))
+    .orderBy(desc(quotationVersions.decidedAt)).limit(10);
+}
+
+export type TermsStatus =
+  | { kind: "none" }
+  | { kind: "template"; name: string; edited: boolean }
+  | { kind: "previous"; label: string; edited: boolean }
+  | { kind: "custom" };
+
+type TermsFields = Pick<QuotationVersion, "id" | "termsText" | "termsTemplateId" | "termsSourceVersionId">;
+
+/** Where each version's terms came from and whether they were changed, so Finance knows what to read closely. */
+export async function resolveTermsStatus(db: DB, versions: TermsFields[]): Promise<Map<string, TermsStatus>> {
+  const tIds = [...new Set(versions.map((v) => v.termsTemplateId).filter((x): x is string => !!x))];
+  const sIds = [...new Set(versions.map((v) => v.termsSourceVersionId).filter((x): x is string => !!x))];
+  const templates = tIds.length ? await db.select({ id: termsTemplates.id, name: termsTemplates.name, body: termsTemplates.body }).from(termsTemplates).where(inArray(termsTemplates.id, tIds)) : [];
+  const sources = sIds.length
+    ? await db.select({ id: quotationVersions.id, termsText: quotationVersions.termsText, version: quotationVersions.version, number: quotations.number })
+      .from(quotationVersions).innerJoin(quotations, eq(quotations.id, quotationVersions.quotationId)).where(inArray(quotationVersions.id, sIds))
+    : [];
+  const out = new Map<string, TermsStatus>();
+  for (const v of versions) {
+    const text = normaliseTerms(v.termsText);
+    const src = sources.find((s) => s.id === v.termsSourceVersionId);
+    const tpl = templates.find((t) => t.id === v.termsTemplateId);
+    if (!text) out.set(v.id, { kind: "none" });
+    else if (src) out.set(v.id, { kind: "previous", label: `${src.number} v${src.version}`, edited: normaliseTerms(src.termsText) !== text });
+    else if (tpl) out.set(v.id, { kind: "template", name: tpl.name, edited: normaliseTerms(tpl.body) !== text });
+    else out.set(v.id, { kind: "custom" });
+  }
+  return out;
+}
+
+export function describeTerms(s: TermsStatus | undefined): { label: string; short: string; review: boolean } {
+  switch (s?.kind) {
+    case undefined:
+    case "none": return { label: "No terms & conditions yet", short: "Missing", review: true };
+    case "template": return s.edited
+      ? { label: `Edited from the "${s.name}" template`, short: "Edited", review: true }
+      : { label: `Standard "${s.name}" template, unchanged`, short: "Standard", review: false };
+    case "previous": return s.edited
+      ? { label: `Edited from the terms approved in ${s.label}`, short: "Edited", review: true }
+      : { label: `Same terms as approved in ${s.label}`, short: "Same as before", review: false };
+    case "custom": return { label: "Written specially for this quotation", short: "Custom", review: true };
+  }
 }
 
 export async function logPdfDownload(db: DB, actor: Actor, quotationId: string, version: number, kind: "client" | "draft_preview") {

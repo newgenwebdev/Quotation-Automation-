@@ -1,6 +1,6 @@
 import {
-  addCatalogueLine, addCustomLine, approveQuotation, cancelQuotation, recallSubmission, rejectQuotation,
-  removeLine, reviseQuotation, submitForApproval, updateHeader, updateScope,
+  addCatalogueLine, addCustomLine, approveQuotation, cancelQuotation, loadTerms, recallSubmission, rejectQuotation,
+  removeLine, reviseQuotation, submitForApproval, updateHeader, updateScope, updateTerms,
 } from "@/quotations/service";
 import { back, db, formHandler, lines, optStr, ringgitToSen, str } from "@/web/server";
 import type { Permission } from "@/auth/permissions";
@@ -35,6 +35,19 @@ export async function POST(req: Request, ctx: Ctx) {
           confirmedTimeline: str(form, "confirmedTimeline"), internalNotes: str(form, "internalNotes"),
         });
         return back(page, { ok: "Scope saved." });
+      });
+    case "terms":
+      return run(undefined, async ({ user, form }) => {
+        await updateTerms(db(), user, id, String(form.get("termsText") ?? ""));
+        return back(page, { ok: "Terms & conditions saved." });
+      });
+    case "load-terms":
+      return run(undefined, async ({ user, form }) => {
+        const src = str(form, "source");
+        const m = src.match(/^(t|q):([0-9a-f-]{36})$/);
+        if (!m) throw Object.assign(new Error("Choose a template or earlier terms first."), { code: "BAD_INPUT" });
+        await loadTerms(db(), user, id, m[1] === "t" ? { kind: "template", templateId: m[2] } : { kind: "previous", versionId: m[2] });
+        return back(page, { ok: "Terms & conditions replaced. Adjust them for this client if needed, then save." });
       });
     case "add-catalogue":
       return run(undefined, async ({ user, form }) => {

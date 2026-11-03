@@ -36,6 +36,20 @@
       "when": 1793611762443,
       "tag": "0004_quotation_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793675810163,
+      "tag": "0005_terms",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793675810818,
+      "tag": "0006_terms_guards",
+      "breakpoints": true
     }
   ]
 }

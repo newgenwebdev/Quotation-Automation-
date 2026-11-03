@@ -23,6 +23,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         {approver && <a href="/approvals">Approvals{waiting > 0 && <span className="count">{waiting}</span>}</a>}
         <a href="/catalogue">Price list</a>
         {can(user, "policy.draft") && <a href="/policy">Payment terms</a>}
+        {can(user, "terms.manage") && <a href="/terms">T&amp;C templates</a>}
         {can(user, "audit.read") && <a href="/audit">Audit log</a>}
         {can(user, "users.manage") && <a href="/users">Users</a>}
         <form method="post" action="/api/auth/logout">

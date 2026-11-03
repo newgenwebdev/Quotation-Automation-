@@ -25,7 +25,7 @@ export const POST = formHandler({ permission: "policy.draft", errorPath: "/polic
     taxEnabled,
     taxLabel: taxEnabled ? optStr(form, "taxLabel") : null,
     taxRateBp: taxEnabled && str(form, "taxRate") ? percentToBp(str(form, "taxRate"), "Tax rate") : null,
-    termsText: optStr(form, "termsText"),
+    termsText: null, // per-client terms now live on each quotation (see T&C templates)
     validFrom: str(form, "validFrom"),
   });
   return back("/policy", { ok: `Draft v${row.version} saved. Another Finance or Admin person can now approve it.` });

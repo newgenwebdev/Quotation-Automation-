@@ -72,8 +72,7 @@ export default async function PolicyPage({ searchParams }: { searchParams: Searc
                 <input id="taxRate" name="taxRate" inputMode="decimal" defaultValue={current?.taxRateBp != null ? current.taxRateBp / 100 : ""} />
               </div>
             </div>
-            <label htmlFor="termsText">Other terms printed on quotations <span className="hint">optional</span></label>
-            <textarea id="termsText" name="termsText" defaultValue={current?.termsText ?? ""} />
+            <p className="muted">Terms &amp; conditions are set per client on each quotation. Standard wording lives under <a href="/terms">T&amp;C templates</a>.</p>
             <p><button type="submit">Save as draft</button></p>
           </form>
         </>
@@ -94,7 +93,6 @@ function PolicyCard({ p, people }: { p: typeof commercialPolicies.$inferSelect; 
         <div><label>Quotation validity</label>{p.quoteValidityDays ? `${p.quoteValidityDays} days` : <span className="muted">Not set</span>}</div>
         <div><label>Tax</label>{p.taxEnabled ? `${p.taxLabel} ${(p.taxRateBp ?? 0) / 100}%` : "No tax charged"}</div>
       </div>
-      {p.termsText && (<><label>Other terms</label><p style={{ whiteSpace: "pre-wrap" }}>{p.termsText}</p></>)}
       <p className="muted">Drafted by {people[p.createdBy] ?? "unknown"}{p.approvedBy && ` · approved by ${people[p.approvedBy] ?? "unknown"} on ${fmtDateTime(p.approvedAt)}`}</p>
     </div>
   );

@@ -182,11 +182,13 @@ export async function renderQuotationPdf(b: QuoteBundle, opts: PdfOptions = {}):
     section("Payment details", () => doc.font("Helvetica").fontSize(9).fillColor(INK)
       .text(`${bank.bank} · ${bank.accountName} · ${bank.accountNumber}`, M + 6, doc.y, { width: W }));
   }
-  section("Terms", () => {
+  // This client's terms & conditions, exactly as approved. (Quotations made before per-client
+  // terms existed fall back to the old payment-terms text frozen in their snapshot.)
+  const terms = v.termsText ?? snap?.termsText ?? null;
+  section("Terms & conditions", () => {
     doc.font("Helvetica").fontSize(9).fillColor(INK);
     if (snap) doc.text(`This quotation is valid for ${snap.quoteValidityDays} days from the date of approval${draft ? "" : ` (until ${fmtDate(v.validUntil)})`}.`, M + 6, doc.y, { width: W - 6 });
-    doc.text("Work outside the scope above will be quoted separately.", M + 6, doc.y, { width: W - 6 });
-    if (snap?.termsText) doc.text(snap.termsText, M + 6, doc.y + 2, { width: W - 6 });
+    if (terms) doc.font("Helvetica").fontSize(8.5).text(terms, M + 6, doc.y + 4, { width: W - 6, lineGap: 1.5 });
   });
 
   // ---------- Approval ----------

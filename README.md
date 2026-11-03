@@ -9,6 +9,7 @@ Home of **Quinn**, NewGen's AI Quotation Specialist. See [docs/ARCHITECTURE.md](
 | 1 | Pricing catalogue, commercial policy, pricing engine, roles, audit log | ✅ Built and tested |
 | 1b | Login, users, price-list / payment-terms / audit screens | ✅ Built and tested |
 | 1c | Quotations workspace: Sales builds quotes (price-list + custom lines), Finance approves every quote, branded PDF, revisions | ✅ Built and tested |
+| 1d | Per-client terms & conditions: Finance T&C templates, tailored per quotation, reused from the client's earlier approved quotes, frozen on submit, printed on PDF | ✅ Built and tested |
 | 2 | AI requirements extraction (worker + pg-boss) | Not started |
 | 3 | Classification and clarification questions | Not started |
 | 4 | Quinn fills a draft quotation from discovery notes | Not started |
