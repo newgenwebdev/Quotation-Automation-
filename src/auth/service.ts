@@ -2,19 +2,20 @@
  * LOGIN AND USER MANAGEMENT
  *
  * How someone gets access:
- *   1. An Admin adds them (name, email, role). The system creates a one-time setup link.
+ *   1. An Admin adds them (name, email). Everyone is an Admin for now (see permissions.ts).
+ *      The system creates a one-time setup link.
  *   2. The Admin sends that link privately (WhatsApp, email). It works once and expires in 72 hours.
  *   3. The person opens it and chooses their own password. Nobody else ever knows it.
  * No emails are sent by the system yet, so no email service is needed.
  *
  * Protections: passwords hashed with scrypt; sessions and links stored only as hashes;
  * 5 wrong passwords lock the account for 15 minutes; deactivated users are logged out at once;
- * the last active Admin can't be removed or demoted.
+ * the last active Admin can't be deactivated.
  */
 import { z } from "zod";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
-import { users, sessions, setupTokens, auditLog, type User, type Role } from "@/db/schema";
+import { users, sessions, setupTokens, auditLog, type User } from "@/db/schema";
 import { assertCan, type Actor } from "./permissions";
 import { writeAudit } from "@/audit/log";
 import { hashPassword, verifyPassword, newToken, hashToken, dummyVerify } from "./crypto";
@@ -36,7 +37,6 @@ export function toActor(u: Pick<User, "id" | "role" | "email">): Actor {
 const NewUserInput = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email"),
   name: z.string().trim().min(2, "Enter a name"),
-  role: z.enum(["sales", "technical", "finance", "admin"]),
 });
 
 async function issueSetupToken(tx: Pick<DB, "insert">, userId: string): Promise<string> {
@@ -55,7 +55,7 @@ export async function createUser(db: DB, actor: Actor, raw: z.input<typeof NewUs
   return db.transaction(async (tx) => {
     const [existing] = await tx.select({ id: users.id }).from(users).where(eq(users.email, input.email));
     if (existing) throw new AuthError("EMAIL_TAKEN", "A user with that email already exists.");
-    const [user] = await tx.insert(users).values(input).returning();
+    const [user] = await tx.insert(users).values({ ...input, role: "admin" }).returning();
     const setupToken = await issueSetupToken(tx, user.id);
     await writeAudit(tx, actor, { action: "user.created", entityType: "user", entityId: user.id, after: { email: user.email, name: user.name, role: user.role } });
     return { user, setupToken };
@@ -169,24 +169,6 @@ export async function logout(db: DB, sessionToken: string | undefined): Promise<
 async function countActiveAdmins(tx: Pick<DB, "select">): Promise<number> {
   const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(users).where(and(eq(users.role, "admin"), eq(users.active, true)));
   return n;
-}
-
-export async function changeRole(db: DB, actor: Actor, userId: string, role: Role, reason?: string): Promise<User> {
-  assertCan(actor, "users.manage");
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('admin-count'))`);
-    const [user] = await tx.select().from(users).where(eq(users.id, userId)).for("update");
-    if (!user) throw new AuthError("NOT_FOUND", "User not found.");
-    if (user.role === role) return user;
-    if (user.role === "admin" && user.active && (await countActiveAdmins(tx)) <= 1) {
-      throw new AuthError("LAST_ADMIN", "This is the only active Admin. Make someone else Admin first.");
-    }
-    const [updated] = await tx.update(users).set({ role }).where(eq(users.id, userId)).returning();
-    // Role changes take effect immediately: existing sessions are ended.
-    await tx.delete(sessions).where(eq(sessions.userId, userId));
-    await writeAudit(tx, actor, { action: "user.role_changed", entityType: "user", entityId: userId, before: { role: user.role }, after: { role }, reason });
-    return updated;
-  });
 }
 
 export async function setActive(db: DB, actor: Actor, userId: string, active: boolean): Promise<User> {

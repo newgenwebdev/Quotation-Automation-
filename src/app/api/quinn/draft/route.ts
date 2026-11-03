@@ -10,8 +10,6 @@ export const POST = formHandler({ permission: "quotes.create", errorPath: "/quot
   const task = await createDraftTask(db(), user, {
     description: String(form.get("description") ?? ""),
     clientCompany: str(form, "clientCompany"),
-    termsTemplateId: str(form, "termsTemplateId") || "none",
-    extraTerms: String(form.get("extraTerms") ?? ""),
   });
   await enqueueDraftTask(task.id);
   return back(`/quinn/tasks/${task.id}`);

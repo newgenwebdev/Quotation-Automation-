@@ -5,7 +5,7 @@ services:
     build: .
     environment:
       DATABASE_URL: postgres://newgen:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/newgen_office
-      ALLOW_SELF_APPROVAL: ${ALLOW_SELF_APPROVAL:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports: ["3000:3000"]
     depends_on:
       db: { condition: service_healthy }

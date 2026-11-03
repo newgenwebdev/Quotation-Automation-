@@ -1,8 +1,8 @@
-import { createCatalogueDraft } from "@/catalogue/service";
+import { saveCatalogueItem } from "@/catalogue/service";
 import { back, db, formHandler } from "@/web/server";
 import { catalogueInputFromForm } from "@/web/catalogue-form";
 
-export const POST = formHandler({ permission: "catalogue.draft", errorPath: "/catalogue/new" }, async ({ user, form }) => {
-  const row = await createCatalogueDraft(db(), user, catalogueInputFromForm(form));
-  return back(`/catalogue/${row.id}`, { ok: `Draft saved as ${row.code} v${row.version}. Another Finance or Admin person can now approve it.` });
+export const POST = formHandler({ permission: "catalogue.manage", errorPath: "/settings/price-list/new" }, async ({ user, form }) => {
+  const row = await saveCatalogueItem(db(), user, catalogueInputFromForm(form));
+  return back(`/settings/price-list/${row.id}`, { ok: `${row.name} saved${row.version > 1 ? ` (version ${row.version})` : ""}. It's used for new quotations from now on.` });
 });

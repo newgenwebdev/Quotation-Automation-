@@ -2,71 +2,61 @@
 
 ## The one rule everything is built around
 
-**The AI reads and writes words. Plain code handles money and permissions.**
+**The AI reads and writes words. Plain code handles money.**
 
 | Job | Who does it | Why |
 |---|---|---|
-| Read messy discovery notes, extract requirements, suggest questions, suggest matching catalogue codes, write scope text | Quinn (AI) | Language work is what AI is good at |
-| Decide which prices exist and their terms | Finance (humans) | Commercial authority |
-| Calculate every ringgit on a quote | Pricing engine (`src/pricing/engine.ts`) | Must be exact, repeatable and auditable |
-| Decide who may approve, discount or release | Permission rules + workflow (code) | Can't be talked out of it by a cleverly written client note |
+| Read WhatsApp chats, emails and notes; write the client-facing content; pick which price-list item applies and the quantity; flag what's missing | Quinn (OpenAI, `src/quinn/`) | Language work is what AI is good at |
+| Decide which prices exist | NewGen staff, in Settings → Price list | Commercial authority |
+| Apply prices and calculate every ringgit (lines, discount, tax, total, payment milestones) | `src/quotations/calc.ts` (same code in the browser and on the server) | Must be exact and repeatable |
 
-If Quinn suggests a catalogue code that doesn't exist, isn't approved or is expired, the pricing engine simply refuses it.
+Quinn's answer format has **no price fields at all**. A line gets a price only from the price list, through the item Quinn named; anything else is saved as **Price review required**, and the quotation can't be finalised until a person enters the price (checked in code and by a database trigger).
+
+## Workflow
+
+```
+Generate with Quinn ─┐
+                     ├─► the same editor (draft) ──finalise──► finalised ──mark as sent──► sent
+Generate manually ───┘          ▲                                  │                         │
+                                └──────── Edit (new revision) ◄────┴─────────────────────────┘
+Any open quotation ──cancel──► cancelled          Duplicate: a new quotation from any existing one
+```
+
+- One role for now (**Admin**): every team member can create, edit, finalise and export. Each quotation records who created it.
+- No approval step. Finalising checks: client and title filled in, at least one item, every item priced, payment terms add up to 100%, validity date set. Suspicious values (prices of RM 10 or less, very short T&C, validity under a week, a date in the past) are shown as warnings first.
+- A finalised version is frozen by the database. "Edit" starts a new draft revision; the finalised one stays as a record.
 
 ## Components
 
 ```
- Browser (Next.js pages, 3D office)
-        │
-        ▼
- Next.js server ──► Services (catalogue, pricing, quotations, approvals)
-        │                     │
-        │                     ▼
-        │              PostgreSQL ◄── pg-boss job queue (lives in the same DB)
-        │                     ▲
-        ▼                     │
- Worker process ── runs Quinn's jobs: AI extraction, drafting, PDF ──► AI API (Anthropic/OpenAI)
+ Browser ── Next.js pages + the editor (client component, live totals)
+    │
+    ▼
+ Next.js server ──► services: quotations, price list / payment terms, T&C, company profile, users
+    │                    │
+    │                    ▼
+    │              PostgreSQL ◄── pg-boss job queue (same database)
+    ▼                    ▲
+ Quinn worker (in the app container) ── OpenAI Responses API (strict JSON schema)
 ```
 
-- **One database** holds data, the audit log *and* the job queue (pg-boss). Less to run and back up.
-- **The worker** runs separately so slow AI calls never freeze the website.
-- **Quinn's on-screen state** (Idle, Analysing, Drafting, Waiting, Completed, Failed) is read from real job records, never from timers.
+## Tables
 
-## Phase 1 tables (built)
-
-- `users`: role is one of sales / technical / finance / admin.
-- `catalogue_items`: versioned price list. Draft → approved → retired. Approved rows are frozen by a DB trigger.
-- `commercial_policies`: payment milestones (must total 100%), quote validity days, optional tax.
-- `audit_log`: append-only. The DB rejects updates and deletes.
-
-## Planned tables (later phases)
-
-| Table | Purpose | Phase |
-|---|---|---|
-| `quotations` | One per client opportunity: number, client, status, project class (A/B/C), owner | 2 |
-| `quotation_versions` | Snapshot per revision: extracted requirements, pricing result, policy version, PDF location | 2–5 |
-| `quotation_lines` | Priced lines, recording the exact catalogue version used | 4 |
-| `clarification_questions` | Questions Quinn raised, answers received | 3 |
-| `estimate_requests` | Custom work sent to Technical; Finance turns the estimate into an approved one-off price | 6 |
-| `approvals` | Technical and Finance decisions with reason, actor and time | 6 |
-| `agent_tasks` / `agent_events` | What Quinn is doing right now, and what happened (drives the 3D office) | 2, 7 |
-| `notifications` | "Action needed" messages to internal users | 6 |
-
-## Quotation workflow (Phase 6, enforced in code)
-
-```
-new_request → scope_analysis → [clarification] → [technical_review] → draft_preparation
-           → finance_approval → approved → delivered
-Any active state → cancelled.   finance_approval → rejected → (revise) → draft_preparation.
-approved/delivered → revision (new version) → scope_analysis.
-```
-
-Each transition lists which roles may trigger it. Finance approval cannot be skipped, and only an approved version can produce an external PDF.
+- `users` — everyone is `admin` (the old role values stay in the type for history).
+- `company_profile` — NewGen's details printed on the PDF (one row).
+- `catalogue_items` — versioned price list. Saving creates a new version in use immediately; old versions are frozen.
+- `commercial_policies` — default payment milestones, validity days and tax (versioned the same way).
+- `terms_templates` — standard T&C; the default one is applied to new quotations.
+- `quotations` — number, client, creator, status (draft / finalised / sent / cancelled).
+- `quotation_versions` — every section of a quotation and its totals; frozen once finalised.
+- `quotation_lines` — the pricing table; amount = quantity × unit price (enforced by the database).
+- `agent_tasks` / `agent_events` — Quinn's requests and their step-by-step trail.
+- `audit_log` — append-only history of every change.
 
 ## Key decisions
 
-- **Money in sen (integers).** RM 5,899.00 is stored as `589900`. This avoids decimal rounding bugs.
-- **Structured pricing formulas, not free text.** Three models (fixed, per unit, base + extra units) cover current services. Free-text formulas would be a security risk.
-- **Four-eyes approval.** The drafter can't approve their own price. It can be relaxed with `ALLOW_SELF_APPROVAL=true` if one person runs finance.
-- **One approved version per service.** Approving v2 retires v1 immediately. Scheduled future prices aren't supported yet.
-- **"From" prices are not prices.** "Mobile app from RM55,000" is treated as custom (Class C) work needing an estimate.
+- **Money in sen (integers)**, percentages in basis points, half-up rounding. Tax is charged on the subtotal after discount. The last payment milestone absorbs rounding so milestones always add up to the total.
+- **One editor, one data model, one PDF** for both ways of creating a quotation (`saveDraft()` in `src/quotations/service.ts`).
+- **Nothing is made up.** Payment terms, tax and T&C come only from Settings; if Settings is empty those sections start empty. The PDF prints only what's on the quotation.
+- **Two people editing**: a save from a page opened before someone else's save is refused (no silent overwrite).
+- **Migration 0009** moved the old Finance-approval data to the new statuses without deleting anything, logging every change in the audit log.

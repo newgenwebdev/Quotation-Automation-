@@ -1,27 +1,25 @@
 /**
  * WHO MAY DO WHAT
- * One central list, so permissions are never scattered or forgotten.
- * Every service checks here before acting.
+ * One central list, so permissions are never scattered or forgotten. Every service checks here.
+ *
+ * For now there is a single role, Admin: every signed-in team member can create, edit,
+ * finalise and export quotations and manage Settings. (The old Sales / Technical / Finance
+ * values remain in the database type only for history; migration 0009 moved everyone to Admin.)
+ * To bring roles back later, add them to the lists below.
  */
 import type { Role } from "@/db/schema";
 
 export const PERMISSIONS = {
-  "catalogue.read": ["sales", "technical", "finance", "admin"],
-  "catalogue.draft": ["finance", "admin"],
-  "catalogue.approve": ["finance", "admin"],
-  "catalogue.retire": ["finance", "admin"],
-  "policy.draft": ["finance", "admin"],
-  "policy.approve": ["finance", "admin"],
-  "pricing.calculate": ["sales", "technical", "finance", "admin"],
-  "pricing.applyDiscount": ["finance", "admin"],
-  "catalogue.viewDrafts": ["finance", "admin"],
-  "audit.read": ["finance", "admin"],
+  "quotes.create": ["admin"],
+  /** See everyone's quotations (not just your own). */
+  "quotes.viewAll": ["admin"],
+  "catalogue.read": ["admin"],
+  "catalogue.manage": ["admin"],
+  "policy.manage": ["admin"],
+  "terms.manage": ["admin"],
+  "company.manage": ["admin"],
   "users.manage": ["admin"],
-  "quotes.create": ["sales", "finance", "admin"],
-  /** Sales see only their own quotations; these roles see everyone's. */
-  "quotes.viewAll": ["technical", "finance", "admin"],
-  "quotes.approve": ["finance", "admin"],
-  "terms.manage": ["finance", "admin"],
+  "audit.read": ["admin"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

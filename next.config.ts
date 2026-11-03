@@ -8,6 +8,20 @@ const config: NextConfig = {
   outputFileTracingIncludes: {
     "/quotations/[id]/pdf": ["./node_modules/pdfkit/js/data/**", "./node_modules/pdfkit/js/standard-fonts/**", "./public/brand/**"],
   },
+  // Old addresses (before Settings existed) keep working.
+  async redirects() {
+    return [
+      { source: "/approvals", destination: "/quotations", permanent: false },
+      { source: "/catalogue", destination: "/settings/price-list", permanent: false },
+      { source: "/catalogue/new", destination: "/settings/price-list/new", permanent: false },
+      { source: "/catalogue/:id", destination: "/settings/price-list/:id", permanent: false },
+      { source: "/policy", destination: "/settings/payment-terms", permanent: false },
+      { source: "/terms", destination: "/settings/terms", permanent: false },
+      { source: "/terms/:id", destination: "/settings/terms/:id", permanent: false },
+      { source: "/users", destination: "/settings/users", permanent: false },
+      { source: "/audit", destination: "/settings/activity", permanent: false },
+    ];
+  },
 };
 
 export default config;

@@ -1,76 +1,101 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
-import { quotations, quotationVersions, users } from "@/db/schema";
-import { can } from "@/auth/permissions";
+import { QUOTE_STATUSES, type QuoteStatus as Status } from "@/db/schema";
+import { listQuotations } from "@/quotations/service";
 import { db, requireUser } from "@/web/server";
-import { Messages, Money, fmtDateTime, one, type Search } from "@/web/ui";
-import { QuoteStatus } from "@/web/quote-ui";
-
-const TABS = [
-  ["open", "Open"], ["draft", "Drafts"], ["pending_approval", "Waiting for Finance"],
-  ["approved", "Approved"], ["rejected", "Sent back"], ["cancelled", "Cancelled"], ["all", "All"],
-] as const;
+import { Icon, Messages, Money, fmtRelative, one, type Search } from "@/web/ui";
+import { QuoteStatus, QUOTE_STATUS_LABEL } from "@/web/quote-ui";
 
 export default async function QuotationsPage({ searchParams }: { searchParams: Search }) {
-  const user = await requireUser();
+  const user = await requireUser("quotes.create");
   const sp = await searchParams;
-  const tab = (one(sp.tab) ?? "open") as (typeof TABS)[number][0];
-  const seeAll = can(user, "quotes.viewAll");
-
-  const statusFilter =
-    tab === "open" ? inArray(quotations.status, ["draft", "pending_approval", "rejected", "approved"])
-    : tab === "all" ? undefined
-    : eq(quotations.status, tab);
-  const ownerFilter = seeAll ? undefined : eq(quotations.ownerId, user.id);
-
-  const rows = await db().select({
-    q: quotations, ownerName: users.name, totalSen: quotationVersions.totalSen,
-  }).from(quotations)
-    .innerJoin(users, eq(users.id, quotations.ownerId))
-    .innerJoin(quotationVersions, and(eq(quotationVersions.quotationId, quotations.id), eq(quotationVersions.version, quotations.currentVersion)))
-    .where(and(statusFilter, ownerFilter))
-    .orderBy(desc(quotations.updatedAt)).limit(200);
+  const q = (one(sp.q) ?? "").slice(0, 100);
+  const statusParam = one(sp.status);
+  const status = (QUOTE_STATUSES as readonly string[]).includes(statusParam ?? "") ? (statusParam as Status) : "all";
+  const rows = await listQuotations(db(), user, { search: q, status });
+  const href = (s: string) => `/quotations?${new URLSearchParams({ ...(q ? { q } : {}), ...(s !== "all" ? { status: s } : {}) })}`;
 
   return (
     <>
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="page-head">
         <div>
           <h1>Quotations</h1>
-          <p className="sub">{seeAll ? "All quotations across the team." : "Your quotations."}</p>
+          <p className="sub">Create a client-ready quotation in minutes, with Quinn or by hand.</p>
         </div>
-        {can(user, "quotes.create") && (
-          <div className="actions">
-            <a className="btn" href="/quotations/generate">Generate with Quinn</a>
-            <a className="btn secondary" href="/quotations/new">New quotation (manual)</a>
-          </div>
-        )}
       </div>
       <Messages sp={sp} />
-      <nav className="tabs" aria-label="Filter">
-        {TABS.map(([k, l]) => <a key={k} href={`/quotations?tab=${k}`} className={k === tab ? "on" : ""}>{l}</a>)}
-      </nav>
+
+      <div className="hero-actions">
+        <a className="hero primary" href="/quotations/generate">
+          <span className="ico"><Icon name="spark" size={20} /></span>
+          <span><strong>Generate with Quinn</strong><span>Paste a WhatsApp chat, email or meeting notes. Quinn writes and prices the quotation.</span></span>
+        </a>
+        <a className="hero" href="/quotations/new">
+          <span className="ico"><Icon name="pencil" size={20} /></span>
+          <span><strong>Generate manually</strong><span>Fill in one structured form, top to bottom, then preview and export.</span></span>
+        </a>
+      </div>
+
+      <div className="toolbar">
+        <form method="get" action="/quotations" role="search">
+          {status !== "all" && <input type="hidden" name="status" value={status} />}
+          <label htmlFor="q" className="sr-only">Search quotations</label>
+          <input id="q" name="q" type="search" defaultValue={q} placeholder="Search number, client or project" />
+          <button type="submit" className="secondary">Search</button>
+        </form>
+        <nav className="tabs" aria-label="Filter by status">
+          {(["all", ...QUOTE_STATUSES] as const).map((s) => (
+            <a key={s} href={href(s)} aria-current={s === status ? "page" : undefined}>{s === "all" ? "All" : QUOTE_STATUS_LABEL[s]}</a>
+          ))}
+        </nav>
+      </div>
+
       {rows.length === 0 ? (
-        <div className="panel">
-          <p><strong>No quotations here yet.</strong></p>
-          {can(user, "quotes.create") && <p className="muted">Click <strong>New quotation</strong> to start one.</p>}
+        <div className="card empty">
+          <h2>{q || status !== "all" ? "No quotations match" : "No quotations yet"}</h2>
+          <p>{q || status !== "all" ? <a href="/quotations">Clear the search and filters</a> : "Start with Generate with Quinn or Generate manually above."}</p>
         </div>
       ) : (
-        <table>
-          <thead><tr><th>Number</th><th>Client</th><th>Project</th>{seeAll && <th>Owner</th>}<th>Status</th><th className="num">Total</th><th>Updated</th></tr></thead>
-          <tbody>
-            {rows.map(({ q, ownerName, totalSen }) => (
-              <tr key={q.id}>
-                <td className="mono"><a href={`/quotations/${q.id}`}>{q.number}</a>{q.currentVersion > 1 && <span className="muted"> v{q.currentVersion}</span>}</td>
-                <td>{q.clientCompany}</td>
-                <td>{q.projectTitle}</td>
-                {seeAll && <td>{ownerName}</td>}
-                <td><QuoteStatus status={q.status} /></td>
-                <td className="num">{totalSen === null ? <span className="muted">not submitted</span> : <Money sen={totalSen} />}</td>
-                <td>{fmtDateTime(q.updatedAt)}</td>
+        <div className="table-wrap">
+          <table className="stack">
+            <thead>
+              <tr>
+                <th style={{ width: 128 }}>Quotation No.</th><th>Client company</th><th>Project title</th><th style={{ width: 112 }}>Created by</th>
+                <th className="num" style={{ width: 130 }}>Total amount</th><th style={{ width: 104 }}>Status</th><th style={{ width: 112 }}>Last updated</th><th style={{ width: 132 }}><span className="sr-only">Actions</span></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td className="lead" data-label="Quotation No.">
+                    <a className="title mono" href={`/quotations/${r.id}`}>{r.number}</a>
+                    {r.currentVersion > 1 && <div className="cell-sub">Revision {r.currentVersion}</div>}
+                  </td>
+                  <td data-label="Client"><span className="clamp">{r.clientCompany}</span></td>
+                  <td data-label="Project"><span className="clamp">{r.projectTitle}</span></td>
+                  <td data-label="Created by">{r.createdBy}</td>
+                  <td className="num" data-label="Total">
+                    <span>
+                      <Money sen={r.totalSen} />
+                      {r.unpriced > 0 && r.status === "draft" && <><br /><span className="badge review">{r.unpriced} to price</span></>}
+                    </span>
+                  </td>
+                  <td data-label="Status"><QuoteStatus status={r.status} /></td>
+                  <td data-label="Last updated" className="nowrap" title={r.updatedAt.toISOString()}>{fmtRelative(r.updatedAt)}</td>
+                  <td data-label="Actions">
+                    <div className="actions" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                      <a className="btn sm secondary" href={`/quotations/${r.id}`}>{r.status === "draft" ? "Edit" : "View"}</a>
+                      <a className="icon-link" href={`/quotations/${r.id}/pdf`} title="Download PDF" aria-label={`Download PDF of ${r.number}`}><Icon name="download" size={17} /></a>
+                      <form method="post" action={`/api/quotations/${r.id}/duplicate`}>
+                        <button type="submit" className="icon-link" title="Duplicate as a new quotation" aria-label={`Duplicate ${r.number}`}><Icon name="copy" size={17} /></button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
+      <p className="muted small" style={{ marginTop: 10 }}>{rows.length === 300 ? "Showing the 300 most recently updated. Use search to find older ones." : `${rows.length} quotation${rows.length === 1 ? "" : "s"}`}</p>
     </>
   );
 }

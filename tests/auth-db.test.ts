@@ -6,7 +6,7 @@ import { users, setupTokens, auditLog } from "@/db/schema";
 import { PermissionError } from "@/auth/permissions";
 import {
   bootstrapAdmin, createUser, completeSetup, login, getSessionUser, logout,
-  changeRole, setActive, issueResetLink, toActor, MAX_FAILED_LOGINS,
+  setActive, issueResetLink, toActor, MAX_FAILED_LOGINS,
 } from "@/auth/service";
 
 const url = process.env.TEST_DATABASE_URL!;
@@ -38,27 +38,27 @@ describe("First start-up", () => {
 describe("Setup links", () => {
   it("work once, then stop working", async () => {
     const admin = await adminActor();
-    const { setupToken } = await createUser(db, admin, { email: "sean@test.local", name: "Sean", role: "finance" });
+    const { setupToken } = await createUser(db, admin, { email: "sean@test.local", name: "Sean" });
     await completeSetup(db, setupToken, PW);
     await expect(completeSetup(db, setupToken, PW)).rejects.toMatchObject({ code: "INVALID_LINK" });
   });
 
   it("expire", async () => {
     const admin = await adminActor();
-    const { user, setupToken } = await createUser(db, admin, { email: "x@test.local", name: "Xavier", role: "sales" });
+    const { user, setupToken } = await createUser(db, admin, { email: "x@test.local", name: "Xavier" });
     await db.update(setupTokens).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(setupTokens.userId, user.id));
     await expect(completeSetup(db, setupToken, PW)).rejects.toMatchObject({ code: "INVALID_LINK" });
   });
 
   it("reject short passwords", async () => {
     const admin = await adminActor();
-    const { setupToken } = await createUser(db, admin, { email: "y@test.local", name: "Yolanda", role: "sales" });
+    const { setupToken } = await createUser(db, admin, { email: "y@test.local", name: "Yolanda" });
     await expect(completeSetup(db, setupToken, "short")).rejects.toMatchObject({ code: "WEAK_PASSWORD" });
   });
 
   it("a new reset link cancels the older one", async () => {
     const admin = await adminActor();
-    const { user, setupToken: first } = await createUser(db, admin, { email: "z@test.local", name: "Zara", role: "sales" });
+    const { user, setupToken: first } = await createUser(db, admin, { email: "z@test.local", name: "Zara" });
     const second = await issueResetLink(db, admin, user.id);
     await expect(completeSetup(db, first, PW)).rejects.toMatchObject({ code: "INVALID_LINK" });
     await completeSetup(db, second, PW);
@@ -66,7 +66,7 @@ describe("Setup links", () => {
 
   it("only stores hashes, never the token itself", async () => {
     const admin = await adminActor();
-    const { setupToken } = await createUser(db, admin, { email: "h@test.local", name: "Hana", role: "sales" });
+    const { setupToken } = await createUser(db, admin, { email: "h@test.local", name: "Hana" });
     const rows = await db.select().from(setupTokens);
     expect(rows.some((r) => r.tokenHash === setupToken)).toBe(false);
   });
@@ -103,15 +103,22 @@ describe("Login", () => {
 });
 
 describe("User management", () => {
-  it("only Admins can add users", async () => {
+  it("every new person is an Admin (single role)", async () => {
     const admin = await adminActor();
-    const { user } = await createUser(db, admin, { email: "f@test.local", name: "Fin", role: "finance" });
-    await expect(createUser(db, toActor(user), { email: "g@test.local", name: "Gee", role: "admin" })).rejects.toBeInstanceOf(PermissionError);
+    const { user } = await createUser(db, admin, { email: "f@test.local", name: "Fin" });
+    expect(user.role).toBe("admin");
+  });
+
+  it("an account still holding an old role can't manage users", async () => {
+    const admin = await adminActor();
+    const { user } = await createUser(db, admin, { email: "f@test.local", name: "Fin" });
+    const legacy = { ...toActor(user), role: "sales" as const };
+    await expect(createUser(db, legacy, { email: "g@test.local", name: "Gee" })).rejects.toBeInstanceOf(PermissionError);
   });
 
   it("deactivating someone logs them out immediately", async () => {
     const admin = await adminActor();
-    const { user, setupToken } = await createUser(db, admin, { email: "s@test.local", name: "Sales", role: "sales" });
+    const { user, setupToken } = await createUser(db, admin, { email: "s@test.local", name: "Sales" });
     await completeSetup(db, setupToken, PW);
     const { sessionToken } = await login(db, "s@test.local", PW);
     await setActive(db, admin, user.id, false);
@@ -119,24 +126,14 @@ describe("User management", () => {
     await expect(login(db, "s@test.local", PW)).rejects.toMatchObject({ code: "BAD_LOGIN" });
   });
 
-  it("a role change ends existing sessions so new permissions apply at once", async () => {
+  it("the last active Admin can't be deactivated", async () => {
     const admin = await adminActor();
-    const { user, setupToken } = await createUser(db, admin, { email: "r@test.local", name: "Rita", role: "finance" });
-    await completeSetup(db, setupToken, PW);
-    const { sessionToken } = await login(db, "r@test.local", PW);
-    await changeRole(db, admin, user.id, "sales", "Moved to sales team");
-    expect(await getSessionUser(db, sessionToken)).toBeNull();
-  });
-
-  it("the last active Admin can't be demoted or deactivated", async () => {
-    const admin = await adminActor();
-    await expect(changeRole(db, admin, admin.id, "sales")).rejects.toMatchObject({ code: "LAST_ADMIN" });
     await expect(setActive(db, admin, admin.id, false)).rejects.toMatchObject({ code: "LAST_ADMIN" });
   });
 
   it("duplicate emails are refused", async () => {
     const admin = await adminActor();
-    await createUser(db, admin, { email: "d@test.local", name: "Dan", role: "sales" });
-    await expect(createUser(db, admin, { email: "D@test.local", name: "Dan 2", role: "sales" })).rejects.toMatchObject({ code: "EMAIL_TAKEN" });
+    await createUser(db, admin, { email: "d@test.local", name: "Dan" });
+    await expect(createUser(db, admin, { email: "D@test.local", name: "Dan 2" })).rejects.toMatchObject({ code: "EMAIL_TAKEN" });
   });
 });

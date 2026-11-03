@@ -64,6 +64,13 @@
       "when": 1793686327840,
       "tag": "0008_quinn_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793698173982,
+      "tag": "0009_redesign",
+      "breakpoints": true
     }
   ]
 }

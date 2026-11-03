@@ -1,10 +1,10 @@
 /**
- * T&C TEMPLATES — standard terms & conditions wording, maintained by Finance/Admin.
+ * T&C TEMPLATES (Settings) — standard terms & conditions wording.
  *
- * Sales start each quotation from a template (or from terms this client was approved for
- * before) and adjust them for the client. Finance reviews the final wording as part of
- * approving the quotation. Editing a template never changes quotations already created,
- * because each quotation keeps its own copy of the text.
+ * The default template is applied to every new quotation automatically; the salesperson can
+ * pick another template (or the terms used for this client before) and adjust the wording.
+ * Editing a template never changes quotations already created, because each quotation keeps
+ * its own copy of the text.
  */
 import { z } from "zod";
 import { and, asc, eq, ne, sql } from "drizzle-orm";

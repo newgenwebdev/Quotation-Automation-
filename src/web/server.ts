@@ -22,7 +22,8 @@ export async function requireUser(permission?: Permission): Promise<User> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   const user = await getSessionUser(db(), token);
   if (!user) redirect("/login");
-  if (permission && !can(user, permission)) redirect("/quotations?error=" + encodeURIComponent("You don't have access to that page."));
+  // (Everyone is an Admin, so this only triggers for an account changed by hand in the database.)
+  if (permission && !can(user, permission)) redirect("/no-access");
   return user;
 }
 
