@@ -58,27 +58,27 @@ export default async function QuotationsPage({ searchParams }: { searchParams: S
           <table className="stack">
             <thead>
               <tr>
-                <th style={{ width: 128 }}>Quotation No.</th><th>Client company</th><th>Project title</th><th style={{ width: 112 }}>Created by</th>
-                <th className="num" style={{ width: 130 }}>Total amount</th><th style={{ width: 104 }}>Status</th><th style={{ width: 112 }}>Last updated</th><th style={{ width: 132 }}><span className="sr-only">Actions</span></th>
+                <th>Quotation No.</th><th>Client company</th><th>Project title</th><th>Created by</th>
+                <th className="num">Total amount</th><th>Status</th><th>Last updated</th><th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td className="lead" data-label="Quotation No.">
+                  <td className="lead nowrap" data-label="Quotation No.">
                     <a className="title mono" href={`/quotations/${r.id}`}>{r.number}</a>
                     {r.currentVersion > 1 && <div className="cell-sub">Revision {r.currentVersion}</div>}
                   </td>
-                  <td data-label="Client"><span className="clamp">{r.clientCompany}</span></td>
-                  <td data-label="Project"><span className="clamp">{r.projectTitle}</span></td>
-                  <td data-label="Created by">{r.createdBy}</td>
-                  <td className="num" data-label="Total">
+                  <td data-label="Client" style={{ minWidth: 140 }}><span className="clamp">{r.clientCompany}</span></td>
+                  <td data-label="Project" style={{ minWidth: 150 }}><span className="clamp">{r.projectTitle}</span></td>
+                  <td data-label="Created by" className="nowrap">{r.createdBy}</td>
+                  <td className="num nowrap" data-label="Total">
                     <span>
                       <Money sen={r.totalSen} />
                       {r.unpriced > 0 && r.status === "draft" && <><br /><span className="badge review">{r.unpriced} to price</span></>}
                     </span>
                   </td>
-                  <td data-label="Status"><QuoteStatus status={r.status} /></td>
+                  <td data-label="Status" className="nowrap"><QuoteStatus status={r.status} /></td>
                   <td data-label="Last updated" className="nowrap" title={r.updatedAt.toISOString()}>{fmtRelative(r.updatedAt)}</td>
                   <td data-label="Actions">
                     <div className="actions" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>

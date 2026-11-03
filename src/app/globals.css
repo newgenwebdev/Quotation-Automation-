@@ -133,7 +133,7 @@ button.danger:hover { background: var(--err-bg); }
 .badge.approved, .badge.active { background: var(--ok-bg); color: var(--ok); }
 
 /* ---------- Tables ---------- */
-.table-wrap { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.table-wrap { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 th { font-size: 12px; font-weight: 600; color: var(--muted); background: color-mix(in srgb, var(--hover) 60%, var(--card)); white-space: nowrap; }
@@ -271,7 +271,10 @@ td a.title:hover { text-decoration: underline; }
   .pay-row .amount { order: 4; grid-column: 1 / -1; text-align: left; font-size: 13px; color: var(--muted); margin-top: -2px; }
   .ms-row { grid-template-columns: minmax(0, 1fr) 34px; }
   .ms-row input:nth-child(2) { grid-column: 1 / 2; }
-  /* Tables become cards */
+  .table-scroll { overflow-x: auto; }
+}
+/* Below 1100px wide (tablets, narrow windows, phones) multi-column tables become cards. */
+@media (max-width: 1100px) {
   table.stack thead { display: none; }
   table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
   table.stack tr { padding: 12px 14px; border-bottom: 1px solid var(--line); }
@@ -281,5 +284,6 @@ td a.title:hover { text-decoration: underline; }
   table.stack td.lead { display: block; text-align: left; padding-bottom: 6px; }
   table.stack td.lead::before { content: none; }
   table.stack td.num { text-align: right; }
-  .table-scroll { overflow-x: auto; }
+  table.stack td.hide-md { display: none; }
+  tbody tr:hover td { background: transparent; }
 }

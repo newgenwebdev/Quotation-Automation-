@@ -151,7 +151,7 @@ async function QuoteView({ bundle, names, sp }: { bundle: QuoteBundle; names: Re
             <tbody>
               {lines.map((l, i) => (
                 <tr key={l.id}>
-                  <td className="muted hide-sm">{i + 1}</td>
+                  <td className="muted hide-md">{i + 1}</td>
                   <td className="lead"><strong>{l.description}</strong>{l.details && <div className="cell-sub">{l.details}</div>}</td>
                   <td className="num nowrap" data-label="Qty">{quantityText(l.quantity, l.unitLabel)}</td>
                   <td className="num nowrap" data-label="Unit price"><Money sen={l.unitPriceSen} /></td>
