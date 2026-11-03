@@ -195,14 +195,21 @@ export const CustomLineInput = z.object({
   details: optText,
   quantity: z.number().int("Quantity must be a whole number").min(1, "Quantity must be at least 1"),
   unitLabel: optText,
-  unitPriceSen: z.number().int().min(0, "Amount can't be negative"),
+  /** null = price still needed (e.g. drafted by Quinn). Submission is blocked until it's filled in. */
+  unitPriceSen: z.number().int().min(0, "Amount can't be negative").nullable(),
 });
+
+function customTotal(unitPriceSen: number | null, quantity: number): number | null {
+  if (unitPriceSen === null) return null;
+  const t = unitPriceSen * quantity;
+  if (!Number.isSafeInteger(t)) throw new QuoteError("TOO_LARGE", "Amount is too large.");
+  return t;
+}
 
 /** Add a custom line. Sales proposes the amount; Finance must approve the whole quotation. */
 export async function addCustomLine(db: DB, actor: Actor, quotationId: string, raw: z.input<typeof CustomLineInput>) {
   const input = CustomLineInput.parse(raw);
-  const lineTotalSen = input.unitPriceSen * input.quantity;
-  if (!Number.isSafeInteger(lineTotalSen)) throw new QuoteError("TOO_LARGE", "Amount is too large.");
+  const lineTotalSen = customTotal(input.unitPriceSen, input.quantity);
   return db.transaction(async (tx) => {
     const { quotation, version } = await loadForUpdate(tx, actor, quotationId);
     assertEditable(actor, quotation, version);
@@ -211,6 +218,27 @@ export async function addCustomLine(db: DB, actor: Actor, quotationId: string, r
     }).returning();
     await writeAudit(tx, actor, { action: "quote.line_added", entityType: "quotation", entityId: quotationId, after: { kind: "custom", description: input.description, quantity: input.quantity, unitPriceSen: input.unitPriceSen } });
     return line;
+  });
+}
+
+/** Edit a custom line (most often: fill in the price for a line Quinn drafted). */
+export async function updateCustomLine(db: DB, actor: Actor, quotationId: string, lineId: string, raw: z.input<typeof CustomLineInput>) {
+  const input = CustomLineInput.parse(raw);
+  const lineTotalSen = customTotal(input.unitPriceSen, input.quantity);
+  return db.transaction(async (tx) => {
+    const { quotation, version } = await loadForUpdate(tx, actor, quotationId);
+    assertEditable(actor, quotation, version);
+    const [line] = await tx.select().from(quotationLines).where(and(eq(quotationLines.id, lineId), eq(quotationLines.versionId, version.id))).for("update");
+    if (!line) throw new QuoteError("NOT_FOUND", "Line not found.");
+    if (line.kind !== "custom") throw new QuoteError("NOT_CUSTOM", "Price-list items are priced automatically. Remove and re-add to change the quantity.");
+    const [row] = await tx.update(quotationLines).set({ ...input, lineTotalSen }).where(eq(quotationLines.id, lineId)).returning();
+    await tx.update(quotations).set({ updatedAt: new Date() }).where(eq(quotations.id, quotationId));
+    await writeAudit(tx, actor, {
+      action: "quote.line_updated", entityType: "quotation", entityId: quotationId,
+      before: { description: line.description, quantity: line.quantity, unitPriceSen: line.unitPriceSen },
+      after: { description: row.description, quantity: row.quantity, unitPriceSen: row.unitPriceSen },
+    });
+    return row;
   });
 }
 
@@ -255,6 +283,8 @@ export async function submitForApproval(db: DB, actor: Actor, quotationId: strin
     if (lines.length === 0) throw new QuoteError("NO_LINES", "Add at least one line before submitting.");
     if (!version.scopeSummary) throw new QuoteError("NO_SCOPE", "Write a short scope summary before submitting.");
     if (!version.termsText?.trim()) throw new QuoteError("NO_TERMS", "Add the terms & conditions before submitting (choose a template or write them).");
+    const unpriced = lines.filter((l) => l.lineTotalSen === null);
+    if (unpriced.length) throw new QuoteError("UNPRICED", `Enter a price for: ${unpriced.map((l) => l.description).join("; ")}.`);
 
     const policy = await loadActivePolicy(tx as unknown as DB);
     if (!policy || policy.validFrom > today() || (policy.validTo && policy.validTo < today()) || policy.quoteValidityDays === null) {
@@ -352,6 +382,7 @@ export async function reviseQuotation(db: DB, actor: Actor, quotationId: string)
       scopeSummary: version.scopeSummary, deliverables: version.deliverables, exclusions: version.exclusions,
       confirmedTimeline: version.confirmedTimeline, internalNotes: version.internalNotes,
       termsText: version.termsText, termsTemplateId: version.termsTemplateId, termsSourceVersionId: version.termsSourceVersionId,
+      aiNotes: version.aiNotes,
     }).returning();
     const oldLines = await tx.select().from(quotationLines).where(eq(quotationLines.versionId, version.id)).orderBy(asc(quotationLines.position));
     for (const l of oldLines) {

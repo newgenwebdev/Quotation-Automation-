@@ -37,7 +37,12 @@ export default async function QuotationsPage({ searchParams }: { searchParams: S
           <h1>Quotations</h1>
           <p className="sub">{seeAll ? "All quotations across the team." : "Your quotations."}</p>
         </div>
-        {can(user, "quotes.create") && <a className="btn" href="/quotations/new">New quotation</a>}
+        {can(user, "quotes.create") && (
+          <div className="actions">
+            <a className="btn" href="/quotations/generate">Generate with Quinn</a>
+            <a className="btn secondary" href="/quotations/new">New quotation (manual)</a>
+          </div>
+        )}
       </div>
       <Messages sp={sp} />
       <nav className="tabs" aria-label="Filter">

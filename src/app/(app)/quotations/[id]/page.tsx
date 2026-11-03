@@ -4,7 +4,7 @@ import { auditLog, catalogueItems, users } from "@/db/schema";
 import { can } from "@/auth/permissions";
 import { canEdit, computeTotals, describeTerms, loadQuote, previousTermsFor, resolveTermsStatus, splitMilestones } from "@/quotations/service";
 import { listTemplates } from "@/terms/service";
-import { db, requireUser } from "@/web/server";
+import { db, requireUser, senToRinggitInput } from "@/web/server";
 import { List, Messages, Money, fmtDate, fmtDateTime, one, type Search } from "@/web/ui";
 import { QuoteStatus } from "@/web/quote-ui";
 import { describePrice } from "@/web/catalogue-form";
@@ -15,7 +15,8 @@ const ACTION_LABEL: Record<string, string> = {
   "quote.recalled": "Recalled to draft", "quote.approved": "Approved by Finance", "quote.rejected": "Sent back by Finance",
   "quote.revised": "New version started", "quote.cancelled": "Cancelled", "quote.pdf_downloaded": "Client PDF downloaded",
   "quote.pdf_preview": "Draft preview opened", "quote.terms_updated": "Terms & conditions edited",
-  "quote.terms_loaded": "Terms & conditions replaced",
+  "quote.terms_loaded": "Terms & conditions replaced", "quote.line_updated": "Line edited",
+  "quote.drafted_by_quinn": "Drafted by Quinn",
 };
 
 export default async function QuotationPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Search }) {
@@ -47,6 +48,7 @@ export default async function QuotationPage({ params, searchParams }: { params: 
   const previousTerms = editable ? await previousTermsFor(db(), user, q) : [];
 
   const frozen = v.totalSen !== null;
+  const unpriced = lines.filter((l) => l.lineTotalSen === null);
   const preview = computeTotals(lines, v.policySnapshot?.tax ?? null);
   const total = frozen ? v.totalSen! : preview.totalSen;
   const base = `/api/quotations/${q.id}`;
@@ -62,7 +64,7 @@ export default async function QuotationPage({ params, searchParams }: { params: 
         <div style={{ textAlign: "right" }}>
           <QuoteStatus status={isCurrent && q.status === "cancelled" ? "cancelled" : v.status === "submitted" ? "pending_approval" : v.status} />
           <div className="big-total"><Money sen={total} /></div>
-          {!frozen && <div className="muted" style={{ fontSize: 13 }}>preview, before tax</div>}
+          {!frozen && <div className="muted" style={{ fontSize: 13 }}>{unpriced.length ? `so far; ${unpriced.length} item${unpriced.length === 1 ? "" : "s"} still need a price` : "preview, before tax"}</div>}
         </div>
       </div>
       <Messages sp={sp} />
@@ -134,6 +136,20 @@ export default async function QuotationPage({ params, searchParams }: { params: 
         </div>
       )}
 
+      {/* ---------- Quinn's notes (internal, never printed) ---------- */}
+      {v.aiNotes && (
+        <details className="panel" open={editable}>
+          <summary>Drafted by Quinn: check before submitting</summary>
+          <p className="muted">Quinn prepared this draft from the description. These notes are for NewGen only and are never printed on the quotation.</p>
+          <div className="grid">
+            <div><label>Questions to ask the client</label><List items={v.aiNotes.clarificationQuestions} empty="None" /></div>
+            <div><label>Information still missing</label><List items={v.aiNotes.missingInformation} empty="None" /></div>
+          </div>
+          <label>Assumptions Quinn made</label>
+          <List items={v.aiNotes.assumptions} empty="None" />
+        </details>
+      )}
+
       {/* ---------- Client details ---------- */}
       {editable ? (
         <details className="panel">
@@ -169,10 +185,28 @@ export default async function QuotationPage({ params, searchParams }: { params: 
                   <strong>{l.description}</strong>
                   <span className="muted"> · {l.kind === "catalogue" ? `price list ${l.catalogueCode}` : "custom: needs Finance approval"}</span>
                   {l.details && <div className="muted">{l.details}</div>}
+                  {editable && l.kind === "custom" && (
+                    <details open={l.lineTotalSen === null} style={{ marginTop: 8 }}>
+                      <summary className="muted">{l.lineTotalSen === null ? "Set price" : "Edit"}</summary>
+                      <form method="post" action={`${base}/update-line`}>
+                        <input type="hidden" name="lineId" value={l.id} />
+                        <label htmlFor={`d-${l.id}`}>Description</label>
+                        <input id={`d-${l.id}`} name="description" defaultValue={l.description} required minLength={3} />
+                        <label htmlFor={`dt-${l.id}`}>Details for the client</label>
+                        <input id={`dt-${l.id}`} name="details" defaultValue={l.details ?? ""} />
+                        <div className="grid">
+                          <div><label htmlFor={`q-${l.id}`}>Quantity</label><input id={`q-${l.id}`} name="quantity" inputMode="numeric" defaultValue={l.quantity} required /></div>
+                          <div><label htmlFor={`u-${l.id}`}>Unit</label><input id={`u-${l.id}`} name="unitLabel" defaultValue={l.unitLabel ?? ""} /></div>
+                          <div><label htmlFor={`p-${l.id}`}>Unit price (RM)</label><input id={`p-${l.id}`} name="unitPrice" inputMode="decimal" defaultValue={senToRinggitInput(l.unitPriceSen)} required /></div>
+                        </div>
+                        <p><button type="submit" className="secondary">Save</button></p>
+                      </form>
+                    </details>
+                  )}
                 </td>
                 <td>{l.quantity}{l.unitLabel ? ` ${l.unitLabel}${l.quantity > 1 ? "s" : ""}` : ""}</td>
                 <td className="num">{l.unitPriceSen === null ? "—" : <Money sen={l.unitPriceSen} />}</td>
-                <td className="num"><Money sen={l.lineTotalSen ?? 0} /></td>
+                <td className="num">{l.lineTotalSen === null ? <span className="badge pending_approval">price needed</span> : <Money sen={l.lineTotalSen} />}</td>
                 {editable && (
                   <td><form method="post" action={`${base}/remove-line`}><input type="hidden" name="lineId" value={l.id} /><button type="submit" className="danger">Remove</button></form></td>
                 )}
@@ -189,7 +223,8 @@ export default async function QuotationPage({ params, searchParams }: { params: 
         <div className="grid" style={{ marginTop: 16 }}>
           <form method="post" action={`${base}/add-catalogue`} className="panel">
             <h2 style={{ marginTop: 0 }}>Add from price list</h2>
-            {priceList.length === 0 ? <p className="muted">No approved prices yet. Use a custom item.</p> : (
+            {priceList.length === 0 ? <p className="muted">No approved prices yet. Use a custom item.</p>
+              : priceList.every((p) => used.has(p.code)) ? <p className="muted">Every price-list item is already on this quotation. Use a custom item for anything else.</p> : (
               <>
                 <label htmlFor="catalogueCode">Service</label>
                 <select id="catalogueCode" name="catalogueCode" required>
@@ -309,6 +344,7 @@ export default async function QuotationPage({ params, searchParams }: { params: 
             <form method="post" action={`${base}/submit`}><button type="submit">Submit to Finance for approval</button></form>
             <a className="btn secondary" href={`/quotations/${q.id}/pdf?v=${v.version}`}>Preview PDF (draft)</a>
           </div>
+          {unpriced.length > 0 && <p className="msg warn">Set a price for {unpriced.length === 1 ? "the item" : `the ${unpriced.length} items`} marked "price needed" before submitting.</p>}
           <p className="muted">Once submitted, items, amounts and terms are locked until Finance decides.</p>
         </div>
       )}

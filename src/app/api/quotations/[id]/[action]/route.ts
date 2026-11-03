@@ -1,6 +1,6 @@
 import {
   addCatalogueLine, addCustomLine, approveQuotation, cancelQuotation, loadTerms, recallSubmission, rejectQuotation,
-  removeLine, reviseQuotation, submitForApproval, updateHeader, updateScope, updateTerms,
+  removeLine, reviseQuotation, submitForApproval, updateCustomLine, updateHeader, updateScope, updateTerms,
 } from "@/quotations/service";
 import { back, db, formHandler, lines, optStr, ringgitToSen, str } from "@/web/server";
 import type { Permission } from "@/auth/permissions";
@@ -61,6 +61,14 @@ export async function POST(req: Request, ctx: Ctx) {
           quantity: wholeNumber(str(form, "quantity"), "Quantity"), unitPriceSen: ringgitToSen(str(form, "unitPrice"), "Unit price"),
         });
         return back(page, { ok: "Custom item added. Finance will review the amount." });
+      });
+    case "update-line":
+      return run(undefined, async ({ user, form }) => {
+        await updateCustomLine(db(), user, id, str(form, "lineId"), {
+          description: str(form, "description"), details: str(form, "details"), unitLabel: str(form, "unitLabel"),
+          quantity: wholeNumber(str(form, "quantity"), "Quantity"), unitPriceSen: ringgitToSen(str(form, "unitPrice"), "Unit price"),
+        });
+        return back(page, { ok: "Item saved." });
       });
     case "remove-line":
       return run(undefined, async ({ user, form }) => {

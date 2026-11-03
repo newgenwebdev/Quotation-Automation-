@@ -50,6 +50,20 @@
       "when": 1793675810818,
       "tag": "0006_terms_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793686327202,
+      "tag": "0007_quinn",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793686327840,
+      "tag": "0008_quinn_guards",
+      "breakpoints": true
     }
   ]
 }

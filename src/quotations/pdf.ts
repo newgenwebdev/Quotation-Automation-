@@ -123,7 +123,8 @@ export async function renderQuotationPdf(b: QuoteBundle, opts: PdfOptions = {}):
     doc.font("Helvetica").fontSize(9).fillColor(INK)
       .text(`${l.quantity}${unit}`, col.qty - 30, y, { width: 70, align: "right" })
       .text(l.unitPriceSen !== null ? formatSen(l.unitPriceSen) : "—", col.unit, y, { width: 72, align: "right" })
-      .text(formatSen(l.lineTotalSen ?? 0), col.amt, y, { width: 80, align: "right" });
+      // Only drafts can contain unpriced lines (submission is blocked until every line has a price).
+      .text(l.lineTotalSen === null ? "Price needed" : formatSen(l.lineTotalSen), col.amt, y, { width: 80, align: "right" });
     y += rowH;
     doc.moveTo(M, y - 5).lineTo(M + W, y - 5).lineWidth(0.5).strokeColor(LINE).stroke();
   });

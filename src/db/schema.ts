@@ -235,6 +235,8 @@ export const quotationVersions = pgTable("quotation_versions", {
   termsTemplateId: uuid("terms_template_id").references(() => termsTemplates.id),
   /** …or a previously approved quotation version for the same client. */
   termsSourceVersionId: uuid("terms_source_version_id").references((): AnyPgColumn => quotationVersions.id),
+  /** Set when Quinn drafted this version: questions for the client, gaps, assumptions. Internal only. */
+  aiNotes: jsonb("ai_notes").$type<QuinnNotes>(),
   currency: char("currency", { length: 3 }).notNull().default("MYR"),
   // Frozen at submission by the pricing code (never typed by a person):
   subtotalSen: bigint("subtotal_sen", { mode: "number" }),
@@ -271,3 +273,57 @@ export const quotationLines = pgTable("quotation_lines", {
 export type Quotation = typeof quotations.$inferSelect;
 export type QuotationVersion = typeof quotationVersions.$inferSelect;
 export type QuotationLine = typeof quotationLines.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// QUINN (AI employee) — every piece of work is a task with a visible trail of events.
+// The Virtual Office will later show Quinn's state from these real records.
+// ---------------------------------------------------------------------------
+
+export type QuinnNotes = {
+  taskId: string;
+  model: string;
+  generatedAt: string;
+  clarificationQuestions: string[];
+  missingInformation: string[];
+  assumptions: string[];
+};
+
+export type DraftTaskInput = {
+  description: string;
+  clientCompany: string | null;
+  /** A template id, or "none". */
+  termsTemplateId: string;
+  extraTerms: string | null;
+};
+
+export const agentTaskStatusEnum = pgEnum("agent_task_status", ["queued", "running", "succeeded", "failed"]);
+
+export const agentTasks = pgTable("agent_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  agent: text("agent").notNull().default("quinn"),
+  kind: text("kind").notNull(), // "draft_quotation"
+  status: agentTaskStatusEnum("status").notNull().default("queued"),
+  requestedBy: uuid("requested_by").notNull().references(() => users.id),
+  input: jsonb("input").$type<DraftTaskInput>().notNull(),
+  quotationId: uuid("quotation_id").references(() => quotations.id),
+  /** Plain-English reason shown to the user. */
+  error: text("error"),
+  /** Technical detail for Admins. */
+  errorDetail: text("error_detail"),
+  model: text("model"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (t) => [index("agent_tasks_requested_idx").on(t.requestedBy, t.createdAt), index("agent_tasks_status_idx").on(t.status)]);
+
+export const agentEvents = pgTable("agent_events", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  taskId: uuid("task_id").notNull().references(() => agentTasks.id),
+  at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  /** reading | drafting | saving | done | failed */
+  step: text("step").notNull(),
+  message: text("message").notNull(),
+}, (t) => [index("agent_events_task_idx").on(t.taskId)]);
+
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type AgentEvent = typeof agentEvents.$inferSelect;
